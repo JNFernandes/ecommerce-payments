@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-Ecommerce.Payments.Consumer-58f875ba-095b-4a00-8511-68a88dd445a9</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Confluent.Kafka" Version="2.15.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ecommerce.Payments.Domain\Ecommerce.Payments.Domain.csproj" />
+    <ProjectReference Include="..\Ecommerce.Payments.Service\Ecommerce.Payments.Service.csproj" />
+    <ProjectReference Include="..\Ecommerce.Payments.Infrastructure\Ecommerce.Payments.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Lets Integration/Component tests drive OrderPlacedConsumer.HandleMessageAsync directly,
+         without needing a live Kafka broker (see quickstart.md test-scenario mapping). -->
+    <InternalsVisibleTo Include="Ecommerce.Payments.Integration.Tests" />
+    <InternalsVisibleTo Include="Ecommerce.Payments.Component.Tests" />
+  </ItemGroup>
+</Project>

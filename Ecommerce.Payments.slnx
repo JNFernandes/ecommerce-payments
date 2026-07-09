@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ecommerce.Payments.Consumer/Ecommerce.Payments.Consumer.csproj" />
+    <Project Path="src/Ecommerce.Payments.Domain/Ecommerce.Payments.Domain.csproj" />
+    <Project Path="src/Ecommerce.Payments.Infrastructure/Ecommerce.Payments.Infrastructure.csproj" />
+    <Project Path="src/Ecommerce.Payments.Service/Ecommerce.Payments.Service.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ecommerce.Payments.Component.Tests/Ecommerce.Payments.Component.Tests.csproj" />
+    <Project Path="tests/Ecommerce.Payments.Domain.Tests/Ecommerce.Payments.Domain.Tests.csproj" />
+    <Project Path="tests/Ecommerce.Payments.Integration.Tests/Ecommerce.Payments.Integration.Tests.csproj" />
+    <Project Path="tests/Ecommerce.Payments.Service.Tests/Ecommerce.Payments.Service.Tests.csproj" />
+  </Folder>
+</Solution>
