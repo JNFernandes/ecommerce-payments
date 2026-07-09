@@ -1,0 +1,38 @@
+<Project>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <!-- Nullable-reference-type violations are real bugs (Constitution Principle III) -->
+    <WarningsAsErrors>$(WarningsAsErrors);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625</WarningsAsErrors>
+    <!-- CA1848/CA1873: LoggerMessage source-generated delegates are unnecessary at this log volume -->
+    <NoWarn>$(NoWarn);CA1848;CA1873</NoWarn>
+  </PropertyGroup>
+
+  <!-- CA1707: underscore-separated Method_Scenario_Expected names are the standard xUnit test convention -->
+  <PropertyGroup Condition="$(MSBuildProjectDirectory.Contains('\tests\')) or $(MSBuildProjectDirectory.Contains('/tests/'))">
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Constitution Principle III bans `dynamic`/`object` for any data flowing through
+    Consumer/Service/Domain/Publisher. Roslyn cannot ban the bare `object`/`dynamic` keywords
+    outright (every type derives from object; banning it breaks basic overrides like
+    `Equals(object)`), so this enforces the concrete, real-world ways loosely-typed data sneaks
+    into an event pipeline: the dynamic runtime binder and JSON "bag of properties" types. The
+    remaining discipline (no `object payload` parameters on DTOs, no `dynamic` locals for event
+    data) is enforced by code review, same as the constitution's own wording implies.
+  -->
+  <ItemGroup Condition="!$(MSBuildProjectDirectory.Contains('\tests\')) and !$(MSBuildProjectDirectory.Contains('/tests/'))">
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" />
+  </ItemGroup>
+
+</Project>

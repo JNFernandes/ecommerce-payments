@@ -1,0 +1,6 @@
+T:System.Dynamic.ExpandoObject;Use a strongly typed DTO instead of a dynamic bag for event/domain data (Constitution Principle III).
+N:Microsoft.CSharp;The C# dynamic runtime binder is banned for event/domain data (Constitution Principle III) - use strongly typed classes.
+T:Newtonsoft.Json.Linq.JObject;Do not deserialize integration events into a loosely-typed JObject - use a dedicated typed DTO (Constitution Principle III).
+T:Newtonsoft.Json.Linq.JToken;Do not pass raw JToken through Consumer/Service/Domain/Publisher - map to a typed DTO immediately (Constitution Principle III).
+T:System.Text.Json.Nodes.JsonObject;Do not pass a raw JsonObject through Consumer/Service/Domain/Publisher - map to a typed DTO immediately (Constitution Principle III).
+T:System.Text.Json.Nodes.JsonNode;Do not pass a raw JsonNode through Consumer/Service/Domain/Publisher - map to a typed DTO immediately (Constitution Principle III).
