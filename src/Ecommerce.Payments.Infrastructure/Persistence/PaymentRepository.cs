@@ -32,7 +32,9 @@ public sealed class PaymentRepository : IPaymentRepository
             Status = payment.Status,
             SourceEventId = payment.SourceEventId,
             CreatedAt = payment.CreatedAt,
-            ProcessedAt = payment.ProcessedAt
+            ProcessedAt = payment.ProcessedAt,
+            FailureReason = payment.FailureReason,
+            FailedAt = payment.FailedAt
         };
 
         _dbContext.Payments.Add(entity);

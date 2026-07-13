@@ -78,4 +78,80 @@ public class PaymentTests
         Assert.Equal(PaymentStatus.Processed, payment.Status);
         Assert.Equal(processedAtAfterFirstProcess, payment.ProcessedAt);
     }
+
+    [Fact]
+    public void Fail_PendingPayment_TransitionsToFailedAndRaisesDomainEvent()
+    {
+        var (orderId, customerId, amount, currency, sourceEventId) = ValidArgs();
+        var payment = Payment.CreatePending(orderId, customerId, amount, currency, sourceEventId);
+        const string reason = "Amount exceeds the maximum allowed threshold.";
+
+        var domainEvent = payment.Fail(reason);
+
+        Assert.Equal(PaymentStatus.Failed, payment.Status);
+        Assert.Equal(reason, payment.FailureReason);
+        Assert.NotNull(payment.FailedAt);
+        Assert.Null(payment.ProcessedAt);
+        Assert.Equal(payment.Id, domainEvent.PaymentId);
+        Assert.Equal(orderId, domainEvent.OrderId);
+        Assert.Equal(reason, domainEvent.Reason);
+        Assert.Equal(payment.FailedAt, domainEvent.FailedAt);
+    }
+
+    [Fact]
+    public void Fail_AlreadyProcessedPayment_ThrowsInvalidPaymentTransitionExceptionWithoutMutatingState()
+    {
+        var (orderId, customerId, amount, currency, sourceEventId) = ValidArgs();
+        var payment = Payment.CreatePending(orderId, customerId, amount, currency, sourceEventId);
+        payment.Process();
+
+        Assert.Throws<InvalidPaymentTransitionException>(() => payment.Fail("some reason"));
+
+        Assert.Equal(PaymentStatus.Processed, payment.Status);
+        Assert.Null(payment.FailureReason);
+        Assert.Null(payment.FailedAt);
+    }
+
+    [Fact]
+    public void Fail_AlreadyFailedPayment_ThrowsInvalidPaymentTransitionExceptionWithoutMutatingState()
+    {
+        var (orderId, customerId, amount, currency, sourceEventId) = ValidArgs();
+        var payment = Payment.CreatePending(orderId, customerId, amount, currency, sourceEventId);
+        payment.Fail("first reason");
+        var failedAtAfterFirstFail = payment.FailedAt;
+
+        Assert.Throws<InvalidPaymentTransitionException>(() => payment.Fail("second reason"));
+
+        Assert.Equal(PaymentStatus.Failed, payment.Status);
+        Assert.Equal("first reason", payment.FailureReason);
+        Assert.Equal(failedAtAfterFirstFail, payment.FailedAt);
+    }
+
+    [Fact]
+    public void Evaluate_AmountAtOrBelowThreshold_TransitionsToProcessedAndReturnsPaymentProcessed()
+    {
+        var (orderId, customerId, amount, currency, sourceEventId) = ValidArgs();
+        var payment = Payment.CreatePending(orderId, customerId, amount, currency, sourceEventId);
+
+        var domainEvent = payment.Evaluate(maxAmountThreshold: amount);
+
+        Assert.Equal(PaymentStatus.Processed, payment.Status);
+        Assert.IsType<PaymentProcessed>(domainEvent);
+        Assert.Null(payment.FailureReason);
+    }
+
+    [Fact]
+    public void Evaluate_AmountAboveThreshold_TransitionsToFailedAndReturnsPaymentFailedWithReason()
+    {
+        var (orderId, customerId, amount, currency, sourceEventId) = ValidArgs();
+        var payment = Payment.CreatePending(orderId, customerId, amount, currency, sourceEventId);
+        var threshold = amount - 1m;
+
+        var domainEvent = payment.Evaluate(maxAmountThreshold: threshold);
+
+        Assert.Equal(PaymentStatus.Failed, payment.Status);
+        var failed = Assert.IsType<PaymentFailed>(domainEvent);
+        Assert.Contains(threshold.ToString(System.Globalization.CultureInfo.InvariantCulture), failed.Reason, StringComparison.Ordinal);
+        Assert.Null(payment.ProcessedAt);
+    }
 }

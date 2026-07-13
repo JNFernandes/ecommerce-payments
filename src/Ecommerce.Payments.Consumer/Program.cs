@@ -10,6 +10,10 @@ builder.Services
     .AddOptions<KafkaOptions>()
     .Bind(builder.Configuration.GetSection(KafkaOptions.SectionName));
 
+builder.Services
+    .AddOptions<PaymentPolicyOptions>()
+    .Bind(builder.Configuration.GetSection(PaymentPolicyOptions.SectionName));
+
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Payments")));
 
