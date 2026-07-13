@@ -13,9 +13,17 @@ public sealed class FakePaymentEventPublisher : IPaymentEventPublisher
 {
     public ConcurrentBag<PaymentProcessed> Published { get; } = [];
 
+    public ConcurrentBag<PaymentFailed> PublishedFailures { get; } = [];
+
     public Task PublishAsync(PaymentProcessed paymentProcessed, CancellationToken cancellationToken)
     {
         Published.Add(paymentProcessed);
+        return Task.CompletedTask;
+    }
+
+    public Task PublishFailedAsync(PaymentFailed paymentFailed, CancellationToken cancellationToken)
+    {
+        PublishedFailures.Add(paymentFailed);
         return Task.CompletedTask;
     }
 }

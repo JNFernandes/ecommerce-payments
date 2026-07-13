@@ -26,4 +26,8 @@ public sealed class PaymentEntity
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? ProcessedAt { get; set; }
+
+    public string? FailureReason { get; set; }
+
+    public DateTimeOffset? FailedAt { get; set; }
 }

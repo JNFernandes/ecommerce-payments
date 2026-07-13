@@ -83,12 +83,51 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IDisposable
                 paymentProcessed.PaymentId,
                 paymentProcessed.OrderId);
 
-            await WriteDeadLetterAsync(paymentProcessed, payload, ex, cancellationToken);
+            await WriteDeadLetterAsync(paymentProcessed.PaymentId, nameof(PaymentProcessedEvent), payload, ex, cancellationToken);
+        }
+    }
+
+    public async Task PublishFailedAsync(PaymentFailed paymentFailed, CancellationToken cancellationToken)
+    {
+        var integrationEvent = new PaymentFailedEvent
+        {
+            EventId = Guid.NewGuid(),
+            OccurredAt = paymentFailed.FailedAt,
+            AggregateId = paymentFailed.PaymentId,
+            Version = 1,
+            OrderId = paymentFailed.OrderId,
+            Reason = paymentFailed.Reason,
+            FailedAt = paymentFailed.FailedAt
+        };
+
+        var payload = JsonSerializer.Serialize(integrationEvent);
+
+        try
+        {
+            var message = new Message<string, string>
+            {
+                Key = paymentFailed.PaymentId.ToString(),
+                Value = payload
+            };
+
+            await _producer.ProduceAsync(_kafkaOptions.PaymentFailedTopic, message, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to publish PaymentFailed for payment {PaymentId} (order {OrderId}) after " +
+                "a successful save; writing to payment_dead_letters instead of losing the event.",
+                paymentFailed.PaymentId,
+                paymentFailed.OrderId);
+
+            await WriteDeadLetterAsync(paymentFailed.PaymentId, nameof(PaymentFailedEvent), payload, ex, cancellationToken);
         }
     }
 
     private async Task WriteDeadLetterAsync(
-        PaymentProcessed paymentProcessed,
+        Guid paymentId,
+        string eventType,
         string payload,
         Exception failure,
         CancellationToken cancellationToken)
@@ -99,8 +138,8 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IDisposable
         dbContext.PaymentDeadLetters.Add(new PaymentDeadLetterEntity
         {
             Id = Guid.NewGuid(),
-            PaymentId = paymentProcessed.PaymentId,
-            EventType = nameof(PaymentProcessedEvent),
+            PaymentId = paymentId,
+            EventType = eventType,
             Payload = payload,
             FailureReason = failure.Message,
             CreatedAt = DateTimeOffset.UtcNow

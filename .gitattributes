@@ -1,0 +1,8 @@
+# Normalize to LF regardless of the local core.autocrlf setting, matching .editorconfig's
+# end_of_line = lf. Without this, Windows checkouts with core.autocrlf=true rewrite every file
+# to CRLF, which then fails `dotnet format --verify-no-changes`.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary

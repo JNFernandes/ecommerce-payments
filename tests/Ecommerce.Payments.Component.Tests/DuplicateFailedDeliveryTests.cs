@@ -10,10 +10,16 @@ using Testcontainers.PostgreSql;
 
 namespace Ecommerce.Payments.Component.Tests;
 
-public class DuplicateDeliveryTests : IAsyncLifetime
+/// <summary>
+/// Proves the idempotency guarantee built for the success path (US-01) already covers the
+/// failure path too — no new production code, only test coverage. See research.md #3.
+/// </summary>
+public class DuplicateFailedDeliveryTests : IAsyncLifetime
 {
     private const string OrderPlacedTopic = "orders.order-placed";
-    private const string PaymentProcessedTopic = "payments.payment-processed";
+    private const string PaymentFailedTopic = "payments.payment-failed";
+    private const decimal MaxAmountThreshold = 100m;
+    private const decimal AboveThresholdAmount = 15000.00m;
 
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
     private readonly KafkaContainer _kafka = new KafkaBuilder("confluentinc/cp-kafka:7.6.1").Build();
@@ -36,7 +42,7 @@ public class DuplicateDeliveryTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RedeliveringIdenticalOrderPlaced_ResultsInExactlyOnePaymentAndOnePublish()
+    public async Task RedeliveringIdenticalAboveThresholdOrderPlaced_ResultsInExactlyOneFailedPaymentAndOnePublish()
     {
         await using var provider = BuildServiceProvider();
         using var consumer = new OrderPlacedConsumer(
@@ -57,7 +63,7 @@ public class DuplicateDeliveryTests : IAsyncLifetime
         var paymentCount = await dbContext.Payments.CountAsync(p => p.OrderId == orderId);
         Assert.Equal(1, paymentCount);
 
-        var publishedCount = CountPublishedMessagesForOrder(orderId, TimeSpan.FromSeconds(15));
+        var publishedCount = CountPublishedFailuresForOrder(orderId, TimeSpan.FromSeconds(15));
         Assert.Equal(1, publishedCount);
     }
 
@@ -76,13 +82,16 @@ public class DuplicateDeliveryTests : IAsyncLifetime
                 o.BootstrapServers = _kafka.GetBootstrapAddress();
                 o.ConsumerGroupId = $"component-tests-{Guid.NewGuid()}";
                 o.OrderPlacedTopic = OrderPlacedTopic;
-                o.PaymentProcessedTopic = PaymentProcessedTopic;
+                o.PaymentFailedTopic = PaymentFailedTopic;
             });
+        services
+            .AddOptions<PaymentPolicyOptions>()
+            .Configure(o => o.MaxAmountThreshold = MaxAmountThreshold);
 
         return services.BuildServiceProvider();
     }
 
-    private int CountPublishedMessagesForOrder(Guid orderId, TimeSpan timeout)
+    private int CountPublishedFailuresForOrder(Guid orderId, TimeSpan timeout)
     {
         using var consumer = new ConsumerBuilder<Ignore, string>(new ConsumerConfig
         {
@@ -91,7 +100,7 @@ public class DuplicateDeliveryTests : IAsyncLifetime
             AutoOffsetReset = AutoOffsetReset.Earliest
         }).Build();
 
-        consumer.Subscribe(PaymentProcessedTopic);
+        consumer.Subscribe(PaymentFailedTopic);
         var count = 0;
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
@@ -128,7 +137,7 @@ public class DuplicateDeliveryTests : IAsyncLifetime
           "aggregateId": "{{orderId}}",
           "version": 1,
           "customerId": "{{Guid.NewGuid()}}",
-          "totalAmount": 129.99
+          "totalAmount": {{AboveThresholdAmount}}
         }
         """;
 }

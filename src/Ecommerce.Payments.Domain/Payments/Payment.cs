@@ -28,6 +28,8 @@ public sealed class Payment
         SourceEventId = sourceEventId;
         CreatedAt = createdAt;
         ProcessedAt = processedAt;
+        FailureReason = null;
+        FailedAt = null;
     }
 
     /// <summary>Payment aggregate id (<c>aggregateId</c> on outbound events).</summary>
@@ -56,6 +58,15 @@ public sealed class Payment
 
     /// <summary>When the transition to <see cref="PaymentStatus.Processed"/> completed. Null while pending.</summary>
     public DateTimeOffset? ProcessedAt { get; private set; }
+
+    /// <summary>
+    /// Human-readable business reason the payment could not be completed. Populated only when
+    /// <see cref="Status"/> is <see cref="PaymentStatus.Failed"/>; null otherwise.
+    /// </summary>
+    public string? FailureReason { get; private set; }
+
+    /// <summary>When the transition to <see cref="PaymentStatus.Failed"/> completed. Null unless failed.</summary>
+    public DateTimeOffset? FailedAt { get; private set; }
 
     /// <summary>
     /// Creates a new <see cref="Payment"/> in <see cref="PaymentStatus.Pending"/> for the given
@@ -109,5 +120,46 @@ public sealed class Payment
         Status = PaymentStatus.Processed;
 
         return new PaymentProcessed(Id, OrderId, Amount, Currency, ProcessedAt.Value);
+    }
+
+    /// <summary>
+    /// Transitions this payment from <see cref="PaymentStatus.Pending"/> to
+    /// <see cref="PaymentStatus.Failed"/> and returns the resulting domain event.
+    /// </summary>
+    /// <exception cref="InvalidPaymentTransitionException">
+    /// The payment is not currently <see cref="PaymentStatus.Pending"/>. State is left unchanged.
+    /// </exception>
+    public PaymentFailed Fail(string reason)
+    {
+        if (Status != PaymentStatus.Pending)
+        {
+            throw new InvalidPaymentTransitionException(
+                $"Cannot fail payment {Id} because it is in status {Status}, not {PaymentStatus.Pending}.");
+        }
+
+        FailedAt = DateTimeOffset.UtcNow;
+        FailureReason = reason;
+        Status = PaymentStatus.Failed;
+
+        return new PaymentFailed(Id, OrderId, reason, FailedAt.Value);
+    }
+
+    /// <summary>
+    /// The sole place the amount-vs-threshold business rule is evaluated (Constitution
+    /// Principle I). Transitions this <see cref="PaymentStatus.Pending"/> payment to
+    /// <see cref="PaymentStatus.Processed"/> if <see cref="Amount"/> is at or below
+    /// <paramref name="maxAmountThreshold"/>, otherwise to <see cref="PaymentStatus.Failed"/>
+    /// with a reason describing the threshold breach. Returns whichever
+    /// <see cref="PaymentDomainEvent"/> resulted, so the caller can route it without ever
+    /// inspecting <see cref="Amount"/> itself.
+    /// </summary>
+    public PaymentDomainEvent Evaluate(decimal maxAmountThreshold)
+    {
+        if (Amount > maxAmountThreshold)
+        {
+            return Fail($"Amount {Amount} {Currency} exceeds the maximum allowed threshold of {maxAmountThreshold} {Currency}.");
+        }
+
+        return Process();
     }
 }

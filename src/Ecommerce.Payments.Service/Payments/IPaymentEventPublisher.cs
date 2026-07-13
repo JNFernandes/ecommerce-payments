@@ -13,4 +13,10 @@ public interface IPaymentEventPublisher
     /// <c>payments.payment-processed</c>.
     /// </summary>
     public Task PublishAsync(PaymentProcessed paymentProcessed, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Serializes and publishes a <see cref="PaymentFailed"/> domain event to
+    /// <c>payments.payment-failed</c>.
+    /// </summary>
+    public Task PublishFailedAsync(PaymentFailed paymentFailed, CancellationToken cancellationToken);
 }

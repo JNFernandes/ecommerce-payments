@@ -13,10 +13,12 @@ using Testcontainers.PostgreSql;
 
 namespace Ecommerce.Payments.Component.Tests;
 
-public class ProcessPaymentFlowTests : IAsyncLifetime
+public class ProcessPaymentFailureFlowTests : IAsyncLifetime
 {
     private const string OrderPlacedTopic = "orders.order-placed";
-    private const string PaymentProcessedTopic = "payments.payment-processed";
+    private const string PaymentFailedTopic = "payments.payment-failed";
+    private const decimal MaxAmountThreshold = 100m;
+    private const decimal AboveThresholdAmount = 15000.00m;
 
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
     private readonly KafkaContainer _kafka = new KafkaBuilder("confluentinc/cp-kafka:7.6.1").Build();
@@ -39,7 +41,7 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task FullFlow_ValidOrderPlaced_SavesPaymentAndPublishesPaymentProcessed()
+    public async Task FullFlow_AmountAboveThreshold_SavesFailedPaymentAndPublishesPaymentFailed()
     {
         await using var provider = BuildServiceProvider();
         var consumer = (OrderPlacedConsumer)provider.GetRequiredService<Microsoft.Extensions.Hosting.IHostedService>();
@@ -51,18 +53,18 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
         try
         {
             var payment = await PollForPaymentAsync(provider, orderId, TimeSpan.FromSeconds(30));
-            Assert.Equal(PaymentStatus.Processed, payment.Status);
+            Assert.Equal(PaymentStatus.Failed, payment.Status);
+            Assert.False(string.IsNullOrWhiteSpace(payment.FailureReason));
 
-            var publishedMessage = ConsumePaymentProcessed(TimeSpan.FromSeconds(30));
+            var publishedMessage = ConsumePaymentFailed(TimeSpan.FromSeconds(30));
             using var document = JsonDocument.Parse(publishedMessage);
             var root = document.RootElement;
 
             Assert.Equal(orderId, root.GetProperty("orderId").GetGuid());
             Assert.Equal(payment.Id, root.GetProperty("aggregateId").GetGuid());
-            Assert.Equal(129.99m, root.GetProperty("amount").GetDecimal());
-            Assert.Equal("USD", root.GetProperty("currency").GetString());
             Assert.True(root.TryGetProperty("eventId", out _));
-            Assert.True(root.TryGetProperty("processedAt", out _));
+            Assert.True(root.TryGetProperty("reason", out _));
+            Assert.True(root.TryGetProperty("failedAt", out _));
         }
         finally
         {
@@ -85,8 +87,11 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
                 o.BootstrapServers = _kafka.GetBootstrapAddress();
                 o.ConsumerGroupId = $"component-tests-{Guid.NewGuid()}";
                 o.OrderPlacedTopic = OrderPlacedTopic;
-                o.PaymentProcessedTopic = PaymentProcessedTopic;
+                o.PaymentFailedTopic = PaymentFailedTopic;
             });
+        services
+            .AddOptions<PaymentPolicyOptions>()
+            .Configure(o => o.MaxAmountThreshold = MaxAmountThreshold);
         services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService, OrderPlacedConsumer>();
 
         return services.BuildServiceProvider();
@@ -97,8 +102,6 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
         using var producer = new ProducerBuilder<Null, string>(
             new ProducerConfig { BootstrapServers = _kafka.GetBootstrapAddress() }).Build();
 
-        // Matches the real payload shape from the orders service (no separate orderId,
-        // no currency, amount is "totalAmount") — see OrderPlacedEvent.cs.
         var json = $$"""
             {
               "eventId": "{{Guid.NewGuid()}}",
@@ -106,7 +109,7 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
               "aggregateId": "{{orderId}}",
               "version": 1,
               "customerId": "{{Guid.NewGuid()}}",
-              "totalAmount": 129.99
+              "totalAmount": {{AboveThresholdAmount}}
             }
             """;
 
@@ -114,9 +117,9 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
         producer.Flush(TimeSpan.FromSeconds(10));
     }
 
-    private string ConsumePaymentProcessed(TimeSpan timeout)
+    private string ConsumePaymentFailed(TimeSpan timeout)
     {
-        var result = KafkaTestConsumer.SubscribeAndConsume(_kafka.GetBootstrapAddress(), PaymentProcessedTopic, timeout);
+        var result = KafkaTestConsumer.SubscribeAndConsume(_kafka.GetBootstrapAddress(), PaymentFailedTopic, timeout);
         Assert.NotNull(result);
         return result.Message.Value;
     }
