@@ -13,7 +13,7 @@ public sealed class PaymentsDbContextFactory : IDesignTimeDbContextFactory<Payme
     {
         var optionsBuilder = new DbContextOptionsBuilder<PaymentsDbContext>();
         var connectionString = Environment.GetEnvironmentVariable("PAYMENTS_CONNECTION_STRING")
-            ?? "Host=localhost;Port=5432;Database=payments;Username=payments;Password=payments";
+            ?? "Host=localhost;Port=5434;Database=payments;Username=payments_user;Password=payments_pass";
         optionsBuilder.UseNpgsql(connectionString);
         return new PaymentsDbContext(optionsBuilder.Options);
     }
