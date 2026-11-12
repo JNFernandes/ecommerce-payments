@@ -17,4 +17,10 @@ public interface IPaymentRepository
     /// Domain (Constitution Principle II).
     /// </summary>
     public Task<bool> ExistsByOrderIdAsync(Guid orderId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Loads the <see cref="Payment"/> for <paramref name="orderId"/>, or returns
+    /// <see langword="null"/> when the order has no payment (a lookup result, not an error).
+    /// </summary>
+    public Task<Payment?> GetByOrderIdAsync(Guid orderId, CancellationToken cancellationToken);
 }

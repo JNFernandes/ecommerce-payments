@@ -17,7 +17,11 @@ public sealed class Payment
         PaymentStatus status,
         Guid sourceEventId,
         DateTimeOffset createdAt,
-        DateTimeOffset? processedAt)
+        DateTimeOffset? processedAt,
+        string? failureReason = null,
+        DateTimeOffset? failedAt = null,
+        DateTimeOffset? refundedAt = null,
+        Guid? refundSourceEventId = null)
     {
         Id = id;
         OrderId = orderId;
@@ -28,8 +32,10 @@ public sealed class Payment
         SourceEventId = sourceEventId;
         CreatedAt = createdAt;
         ProcessedAt = processedAt;
-        FailureReason = null;
-        FailedAt = null;
+        FailureReason = failureReason;
+        FailedAt = failedAt;
+        RefundedAt = refundedAt;
+        RefundSourceEventId = refundSourceEventId;
     }
 
     /// <summary>Payment aggregate id (<c>aggregateId</c> on outbound events).</summary>
@@ -67,6 +73,49 @@ public sealed class Payment
 
     /// <summary>When the transition to <see cref="PaymentStatus.Failed"/> completed. Null unless failed.</summary>
     public DateTimeOffset? FailedAt { get; private set; }
+
+    /// <summary>When the transition to <see cref="PaymentStatus.Refunded"/> completed. Null unless refunded.</summary>
+    public DateTimeOffset? RefundedAt { get; private set; }
+
+    /// <summary>
+    /// The <c>eventId</c> of the <c>OrderCancelled</c> message that caused the refund. Null unless
+    /// refunded. Kept for traceability and used to recognise redeliveries of that same message.
+    /// </summary>
+    public Guid? RefundSourceEventId { get; private set; }
+
+    /// <summary>
+    /// Restores a previously saved <see cref="Payment"/> exactly as stored. Persistence only — it
+    /// runs no business rules and must not be used to create new payments (use
+    /// <see cref="CreatePending"/>).
+    /// </summary>
+    public static Payment Rehydrate(
+        Guid id,
+        Guid orderId,
+        Guid customerId,
+        decimal amount,
+        string currency,
+        PaymentStatus status,
+        Guid sourceEventId,
+        DateTimeOffset createdAt,
+        DateTimeOffset? processedAt,
+        string? failureReason,
+        DateTimeOffset? failedAt,
+        DateTimeOffset? refundedAt,
+        Guid? refundSourceEventId) =>
+        new(
+            id,
+            orderId,
+            customerId,
+            amount,
+            currency,
+            status,
+            sourceEventId,
+            createdAt,
+            processedAt,
+            failureReason,
+            failedAt,
+            refundedAt,
+            refundSourceEventId);
 
     /// <summary>
     /// Creates a new <see cref="Payment"/> in <see cref="PaymentStatus.Pending"/> for the given

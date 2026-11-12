@@ -34,7 +34,9 @@ public sealed class PaymentRepository : IPaymentRepository
             CreatedAt = payment.CreatedAt,
             ProcessedAt = payment.ProcessedAt,
             FailureReason = payment.FailureReason,
-            FailedAt = payment.FailedAt
+            FailedAt = payment.FailedAt,
+            RefundedAt = payment.RefundedAt,
+            RefundSourceEventId = payment.RefundSourceEventId
         };
 
         _dbContext.Payments.Add(entity);
@@ -43,4 +45,29 @@ public sealed class PaymentRepository : IPaymentRepository
 
     public Task<bool> ExistsByOrderIdAsync(Guid orderId, CancellationToken cancellationToken) =>
         _dbContext.Payments.AnyAsync(p => p.OrderId == orderId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<Payment?> GetByOrderIdAsync(Guid orderId, CancellationToken cancellationToken)
+    {
+        var entity = await _dbContext.Payments
+            .AsNoTracking()
+            .SingleOrDefaultAsync(p => p.OrderId == orderId, cancellationToken);
+
+        return entity is null
+            ? null
+            : Payment.Rehydrate(
+                entity.Id,
+                entity.OrderId,
+                entity.CustomerId,
+                entity.Amount,
+                entity.Currency,
+                entity.Status,
+                entity.SourceEventId,
+                entity.CreatedAt,
+                entity.ProcessedAt,
+                entity.FailureReason,
+                entity.FailedAt,
+                entity.RefundedAt,
+                entity.RefundSourceEventId);
+    }
 }

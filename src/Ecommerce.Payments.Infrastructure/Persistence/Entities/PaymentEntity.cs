@@ -30,4 +30,10 @@ public sealed class PaymentEntity
     public string? FailureReason { get; set; }
 
     public DateTimeOffset? FailedAt { get; set; }
+
+    /// <summary>When the payment was refunded; null unless <c>Status</c> is <c>Refunded</c>.</summary>
+    public DateTimeOffset? RefundedAt { get; set; }
+
+    /// <summary><c>eventId</c> of the <c>OrderCancelled</c> message that caused the refund.</summary>
+    public Guid? RefundSourceEventId { get; set; }
 }
