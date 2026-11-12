@@ -47,17 +47,17 @@ ecommerce-orders                         ecommerce-payments
 OrderPlaced    ── orders.order-placed ──▶  create Payment → save → publish
                                             ├─ payments.payment-processed ──▶ Orders confirms order
                                             └─ payments.payment-failed    ──▶ Orders cancels order
-OrderCancelled ── orders.order-cancelled ─▶ refund a Processed payment → save → publish   (US-04)
+OrderCancelled ── orders.order-cancelled ─▶ refund a Processed payment → save → publish
                                             └─ payments.payment-refunded
 ```
 
 | Direction | Topic | Event | Status |
 |---|---|---|---|
 | Consumes | `orders.order-placed` | `OrderPlaced` | Implemented |
-| Consumes | `orders.order-cancelled` | `OrderCancelled` | Planned (US-04) |
+| Consumes | `orders.order-cancelled` | `OrderCancelled` | Implemented (US-04) |
 | Publishes | `payments.payment-processed` | `PaymentProcessed` | Implemented |
 | Publishes | `payments.payment-failed` | `PaymentFailed` | Implemented |
-| Publishes | `payments.payment-refunded` | `PaymentRefunded` | Planned (US-04) |
+| Publishes | `payments.payment-refunded` | `PaymentRefunded` | Implemented (US-04) |
 
 A `Payment` is created as `PENDING`, then evaluated against `PaymentPolicy.MaxAmountThreshold`:
 amounts within the threshold are processed (`PROCESSED`); amounts over it fail
@@ -67,13 +67,36 @@ In inbound order events the order is identified by `aggregateId`. In every publi
 event `aggregateId` is the **payment** id and a separate `orderId` field carries the order id —
 downstream consumers must use `orderId` to identify the order.
 
+**Refunds (US-04):** an `OrderCancelled` for an order whose payment is `PROCESSED` marks it
+`REFUNDED` (full amount) and publishes `PaymentRefunded`. Cancellations for `FAILED`, `PENDING`,
+already `REFUNDED` or missing payments are ignored with an Information log and committed — the
+normal "payment failed → order cancelled" saga path ends here. A redelivered cancellation is
+recognised by its `eventId` (stored on the payment as `RefundSourceEventId`); a re-published
+one with a new `eventId` by the `REFUNDED` state.
+
+**Consumer retries:** both consumers share `KafkaConsumerBase`. If handling a message fails
+(e.g. the database is down), the consumer retries the **same** message with exponential
+backoff (`Kafka:ConsumerRetryBaseDelayMs` → `Kafka:ConsumerRetryMaxDelayMs`) and never commits
+past it, so delivery stays at-least-once.
+
+### Known limitations
+
+- A message that fails permanently blocks its partition and retries indefinitely; there is no
+  inbound dead-letter store yet (follow-up decision).
+- If the process crashes after a refund (or payment) is saved but before its event is published
+  or dead-lettered, that event is lost — there is no transactional outbox.
+- An `OrderCancelled` that arrives before its payment exists is ignored; if the `OrderPlaced` is
+  processed afterwards, that payment is not refunded automatically.
+- `OrderPlacedConsumer` deduplicates by order id rather than by `eventId` (predates
+  Constitution v1.1.0).
+
 ## Background services
 
 | Hosted service | Responsibility | Status |
 |---|---|---|
 | `OrderPlacedConsumer` | Consumes `orders.order-placed` and runs the payment write flow. | Implemented |
 | `DeadLetterRetryWorker` | Every `DeadLetterRetry:IntervalMs`, republishes due `payment_dead_letters` rows unchanged (same topic, key and `eventId`) with exponential backoff, marking them `Resolved` or `Exhausted` after `MaxRetries`; claims rows with `FOR UPDATE SKIP LOCKED` so several instances are safe. See [docs/dead-letter-retry.md](docs/dead-letter-retry.md) and [ADR 0003](docs/adr/0003-dead-letter-retry.md). | Implemented (US-03) |
-| `OrderCancelled` consumer | Refunds `Processed` payments when an order is cancelled. | Planned (US-04) |
+| `OrderCancelledConsumer` | Consumes `orders.order-cancelled`; refunds the order's `Processed` payment and publishes `PaymentRefunded` (dead-lettered on publish failure). Failed, Pending, already Refunded or missing payments are ignored with an Information log. | Implemented (US-04) |
 
 ## Project layout
 
@@ -172,8 +195,9 @@ dotnet test
 | `ConnectionStrings:Payments` | PostgreSQL connection string |
 | `Kafka:BootstrapServers` | Kafka broker address |
 | `Kafka:ConsumerGroupId` | Consumer group id |
-| `Kafka:OrderPlacedTopic` | Inbound topic |
-| `Kafka:PaymentProcessedTopic` / `Kafka:PaymentFailedTopic` | Outbound topics |
+| `Kafka:OrderPlacedTopic` / `Kafka:OrderCancelledTopic` | Inbound topics |
+| `Kafka:PaymentProcessedTopic` / `Kafka:PaymentFailedTopic` / `Kafka:PaymentRefundedTopic` | Outbound topics |
+| `Kafka:ConsumerRetryBaseDelayMs` / `Kafka:ConsumerRetryMaxDelayMs` | Backoff before a consumer re-reads a message whose handling failed (defaults `1000` / `60000`) |
 | `PaymentPolicy:MaxAmountThreshold` | Amount above which a payment fails instead of processing |
 | `DeadLetterRetry:IntervalMs` | Time between dead-letter retry cycles (default `30000`) |
 | `DeadLetterRetry:BatchSize` | Maximum rows retried per cycle (default `20`) |

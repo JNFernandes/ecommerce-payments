@@ -15,11 +15,13 @@ public sealed class PaymentRepository : IPaymentRepository
 {
     private readonly PaymentsDbContext _dbContext;
 
+    /// <summary>Creates the repository over a scoped <see cref="PaymentsDbContext"/>.</summary>
     public PaymentRepository(PaymentsDbContext dbContext)
     {
         _dbContext = dbContext;
     }
 
+    /// <inheritdoc />
     public async Task SaveAsync(Payment payment, CancellationToken cancellationToken)
     {
         var entity = new PaymentEntity
@@ -43,6 +45,7 @@ public sealed class PaymentRepository : IPaymentRepository
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
     public Task<bool> ExistsByOrderIdAsync(Guid orderId, CancellationToken cancellationToken) =>
         _dbContext.Payments.AnyAsync(p => p.OrderId == orderId, cancellationToken);
 

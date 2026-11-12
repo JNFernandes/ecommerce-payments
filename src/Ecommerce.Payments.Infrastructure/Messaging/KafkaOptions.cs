@@ -9,16 +9,22 @@ namespace Ecommerce.Payments.Infrastructure.Messaging;
 /// </summary>
 public sealed class KafkaOptions
 {
+    /// <summary>Configuration section name.</summary>
     public const string SectionName = "Kafka";
 
+    /// <summary>Kafka bootstrap servers, e.g. <c>localhost:9092</c>.</summary>
     public string BootstrapServers { get; set; } = string.Empty;
 
+    /// <summary>Consumer group shared by the service's consumers.</summary>
     public string ConsumerGroupId { get; set; } = string.Empty;
 
+    /// <summary>Inbound topic for <c>OrderPlaced</c>.</summary>
     public string OrderPlacedTopic { get; set; } = string.Empty;
 
+    /// <summary>Outbound topic for <c>PaymentProcessed</c>.</summary>
     public string PaymentProcessedTopic { get; set; } = string.Empty;
 
+    /// <summary>Outbound topic for <c>PaymentFailed</c>.</summary>
     public string PaymentFailedTopic { get; set; } = string.Empty;
 
     /// <summary>Inbound topic for <c>OrderCancelled</c> (default <c>orders.order-cancelled</c>).</summary>

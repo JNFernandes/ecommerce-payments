@@ -120,12 +120,12 @@ Quality gate green.
 
 ## Phase 4: Polish & Cross-Cutting Concerns
 
-- [ ] T032 [P] Update root `README.md`: event flow and events table (`OrderCancelled`/`PaymentRefunded` → Implemented), background services (`OrderCancelledConsumer` → Implemented (US-04)), configuration reference (`Kafka:OrderCancelledTopic`, `Kafka:PaymentRefundedTopic`), and a short "Known limitations" note (research R9)
-- [ ] T033 [P] Update `src/Ecommerce.Payments.Consumer/README.md` (hosted services, topics, `KafkaConsumerBase`), `src/Ecommerce.Payments.Service/README.md` (`RefundPaymentHandler`, `OrderCancelledEvent`), `src/Ecommerce.Payments.Domain/README.md` (Refunded state, `Refund`/`RequestRefund`), `src/Ecommerce.Payments.Infrastructure/README.md` (published `payments.payment-refunded`, new repository methods)
-- [ ] T034 [P] Update `CLAUDE.md` event contracts table (OrderCancelled consumed, PaymentRefunded published — no longer "Planned"; field lists), idempotency section (redeliveries deduplicated by `eventId` via `RefundSourceEventId` before Domain, then the Refunded state), and new consumers derive from `KafkaConsumerBase`; mention `payments.payment-refunded` in `docs/dead-letter-retry.md` where topics are listed
-- [ ] T035 Verify XML doc comments on every new/changed public type and member in Domain `Payments/`, Service `Payments/` and `IntegrationEvents/`, Infrastructure `Messaging/` and `Persistence/`, and Consumer `Consumers/`
-- [ ] T036 Run the manual check in `specs/004-refund-on-order-cancelled/quickstart.md` ("Manual check against ecommerce-infra") if the shared stack can be used without disrupting other services; otherwise record why it was skipped
-- [ ] T037 Final quality gate: `dotnet build`, `dotnet format --verify-no-changes`, `dotnet test` all green; `docker build -t ecommerce-payments .` succeeds
+- [X] T032 [P] Update root `README.md`: event flow and events table (`OrderCancelled`/`PaymentRefunded` → Implemented), background services (`OrderCancelledConsumer` → Implemented (US-04)), configuration reference (`Kafka:OrderCancelledTopic`, `Kafka:PaymentRefundedTopic`), and a short "Known limitations" note (research R9)
+- [X] T033 [P] Update `src/Ecommerce.Payments.Consumer/README.md` (hosted services, topics, `KafkaConsumerBase`), `src/Ecommerce.Payments.Service/README.md` (`RefundPaymentHandler`, `OrderCancelledEvent`), `src/Ecommerce.Payments.Domain/README.md` (Refunded state, `Refund`/`RequestRefund`), `src/Ecommerce.Payments.Infrastructure/README.md` (published `payments.payment-refunded`, new repository methods)
+- [X] T034 [P] Update `CLAUDE.md` event contracts table (OrderCancelled consumed, PaymentRefunded published — no longer "Planned"; field lists), idempotency section (redeliveries deduplicated by `eventId` via `RefundSourceEventId` before Domain, then the Refunded state), and new consumers derive from `KafkaConsumerBase`; mention `payments.payment-refunded` in `docs/dead-letter-retry.md` where topics are listed
+- [X] T035 Verify XML doc comments on every new/changed public type and member in Domain `Payments/`, Service `Payments/` and `IntegrationEvents/`, Infrastructure `Messaging/` and `Persistence/`, and Consumer `Consumers/`
+- [ ] T036 **(skipped — see note)** Run the manual check in `specs/004-refund-on-order-cancelled/quickstart.md` ("Manual check against ecommerce-infra") if the shared stack can be used without disrupting other services; otherwise record why it was skipped
+- [X] T037 Final quality gate: `dotnet build`, `dotnet format --verify-no-changes`, `dotnet test` all green; `docker build -t ecommerce-payments .` succeeds
 
 ---
 
@@ -173,3 +173,20 @@ T032 root README | T033 project READMEs | T034 CLAUDE.md + dead-letter doc
 4. **Polish** — docs, manual check, final gate.
 
 Commit after each phase (or logical group) with the quality gate green.
+
+## Implementation notes
+
+- **T036 skipped**: a local `Ecommerce.Payments.Consumer` (PID 38152) was running against the
+  shared `ecommerce-infra` stack. Running a second instance in the same consumer group, or
+  producing test orders and cancellations there, would interfere with it and with the other
+  services. The same scenarios run in the Component tests against real Kafka and PostgreSQL
+  containers (full flow, redelivery, dead-letter → retry). Run quickstart.md "Manual check"
+  to close this task.
+- **Quality gate configuration**: that running process locks `src/Ecommerce.Payments.Consumer/bin/Debug`,
+  so the gate ran with `-c Release`.
+- **Behaviour change (from `/speckit-analyze`)**: `KafkaConsumerBase` retries a failing message in
+  place instead of moving past it; this applies to `OrderPlacedConsumer` too
+  (`KafkaConsumerBaseRetryTests`).
+- **Open follow-ups**: inbound dead-letter for permanently failing messages; transactional
+  outbox (crash between save and publish); `eventId` dedupe for `OrderPlacedConsumer`;
+  cancellation that arrives before its payment exists.

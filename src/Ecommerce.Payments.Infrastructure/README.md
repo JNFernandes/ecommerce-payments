@@ -12,7 +12,7 @@ Outward-facing adapters, kept in separate folders/namespaces and never reference
   `PaymentEntity`/`PaymentDeadLetterEntity` (persistence models, mapped explicitly to/from
   the `Payment` domain aggregate — EF Core types never leak into Domain),
   `PaymentRepository` (implements `IPaymentRepository`; the `payments.order_id` unique
-  index is the durable idempotency guarantee), and `PaymentDeadLetterRepository`
+  index is the durable idempotency guarantee; `GetByOrderIdAsync` rehydrates the aggregate and `SaveRefundAsync` is a conditional update that only succeeds while the payment is still Processed), and `PaymentDeadLetterRepository`
   (implements `IPaymentDeadLetterRepository`; the single owner of `payment_dead_letters`,
   including the `FOR UPDATE SKIP LOCKED` claim query).
 - **`Messaging/`** (Publisher) — `PaymentEventPublisher` (implements
@@ -35,6 +35,7 @@ Outward-facing adapters, kept in separate folders/namespaces and never reference
 |---|---|---|
 | Publishes | `payments.payment-processed` | `PaymentProcessed` |
 | Publishes | `payments.payment-failed` | `PaymentFailed` |
+| Publishes | `payments.payment-refunded` | `PaymentRefunded` |
 
 Dead-lettered events are republished to the same topic, unchanged.
 

@@ -3,7 +3,8 @@
 When a payment outcome is saved to PostgreSQL but publishing it to Kafka fails, the event is
 written to the `payment_dead_letters` table instead of being lost (Constitution Principle II).
 The **dead-letter retry worker** republishes those rows automatically, so a temporary broker
-outage never loses a `PaymentProcessed` or `PaymentFailed` event.
+outage never loses a `PaymentProcessed`, `PaymentFailed` or `PaymentRefunded` event (topics
+`payments.payment-processed`, `payments.payment-failed`, `payments.payment-refunded`).
 
 Design decision: [ADR 0003 — Dead-letter retry](adr/0003-dead-letter-retry.md).
 Feature spec: [`specs/003-dead-letter-retry`](../specs/003-dead-letter-retry/spec.md) (US-03).
