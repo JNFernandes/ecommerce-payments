@@ -82,6 +82,26 @@ public class PaymentRefundTests
         Assert.Equal(PaymentStatus.Refunded, payment.Status);
     }
 
+    [Theory]
+    [InlineData(PaymentStatus.Failed, RefundIgnoredReason.NotCompleted)]
+    [InlineData(PaymentStatus.Pending, RefundIgnoredReason.NotCompleted)]
+    [InlineData(PaymentStatus.Refunded, RefundIgnoredReason.AlreadyRefunded)]
+    public void RequestRefund_Should_Ignore_Non_Processed_Payment_Without_Changing_It(
+        PaymentStatus status,
+        RefundIgnoredReason expectedReason)
+    {
+        var payment = PaymentIn(status);
+        var (refundedAt, refundSource) = (payment.RefundedAt, payment.RefundSourceEventId);
+
+        var decision = payment.RequestRefund(Guid.NewGuid(), RefundTime);
+
+        var ignored = Assert.IsType<RefundDecision.Ignored>(decision);
+        Assert.Equal(expectedReason, ignored.Reason);
+        Assert.Equal(status, payment.Status);
+        Assert.Equal(refundedAt, payment.RefundedAt);
+        Assert.Equal(refundSource, payment.RefundSourceEventId);
+    }
+
     [Fact]
     public void Rehydrate_Should_Restore_Every_Field()
     {

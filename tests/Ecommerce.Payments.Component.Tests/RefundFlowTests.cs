@@ -143,6 +143,76 @@ public class RefundFlowTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task Redelivered_OrderCancelled_Produces_Exactly_One_PaymentRefunded()
+    {
+        await using var provider = BuildServiceProvider(_kafka.GetBootstrapAddress());
+        var hostedServices = provider.GetServices<IHostedService>().ToList();
+        var orderId = Guid.NewGuid();
+        var cancellation = OrderCancelledJson(orderId, Guid.NewGuid());
+
+        foreach (var service in hostedServices)
+        {
+            await service.StartAsync(CancellationToken.None);
+        }
+
+        PaymentEntity refunded;
+        try
+        {
+            Produce(OrderPlacedTopic, OrderPlacedJson(orderId));
+            await PollForStatusAsync(orderId, PaymentStatus.Processed);
+
+            // The exact same message twice, as Kafka would redeliver it.
+            Produce(OrderCancelledTopic, cancellation);
+            Produce(OrderCancelledTopic, cancellation);
+            refunded = await PollForStatusAsync(orderId, PaymentStatus.Refunded);
+            await Task.Delay(TimeSpan.FromSeconds(3)); // let the second copy be handled
+        }
+        finally
+        {
+            foreach (var service in hostedServices)
+            {
+                await service.StopAsync(CancellationToken.None);
+            }
+        }
+
+        var keys = ConsumeAllKeys(PaymentRefundedTopic, idle: TimeSpan.FromSeconds(5));
+        Assert.Single(keys, key => key == refunded.Id.ToString());
+    }
+
+    private List<string> ConsumeAllKeys(string topic, TimeSpan idle)
+    {
+        using var consumer = new ConsumerBuilder<string, string>(new ConsumerConfig
+        {
+            BootstrapServers = _kafka.GetBootstrapAddress(),
+            GroupId = $"component-tests-assert-{Guid.NewGuid()}",
+            AutoOffsetReset = AutoOffsetReset.Earliest
+        }).Build();
+        consumer.Subscribe(topic);
+
+        var keys = new List<string>();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        var lastMessageAt = DateTime.UtcNow;
+        while (DateTime.UtcNow < deadline && (keys.Count == 0 || DateTime.UtcNow - lastMessageAt < idle))
+        {
+            try
+            {
+                var result = consumer.Consume(TimeSpan.FromSeconds(1));
+                if (result is not null)
+                {
+                    keys.Add(result.Message.Key);
+                    lastMessageAt = DateTime.UtcNow;
+                }
+            }
+            catch (ConsumeException ex) when (ex.Error.Code == ErrorCode.UnknownTopicOrPart)
+            {
+                // Topic not visible yet.
+            }
+        }
+
+        return keys;
+    }
+
     internal ServiceProvider BuildServiceProvider(string bootstrapServers)
     {
         var services = new ServiceCollection();

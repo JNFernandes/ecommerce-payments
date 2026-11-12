@@ -68,6 +68,91 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         Assert.Equal(ProcessedAmount, refund.Amount);
     }
 
+    [Fact]
+    public async Task HandleMessageAsync_NoPayment_IsCommittedAndChangesNothing()
+    {
+        using var consumer = CreateCancelledConsumer();
+
+        var committed = await consumer.HandleMessageAsync(OrderCancelledJson(Guid.NewGuid(), Guid.NewGuid()), CancellationToken.None);
+
+        Assert.True(committed);
+        await using var dbContext = CreateDbContext();
+        Assert.Equal(0, await dbContext.Payments.CountAsync());
+        Assert.Empty(Publisher.PublishedRefunds);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_FailedPayment_StaysFailed()
+    {
+        var orderId = Guid.NewGuid();
+        await PlaceOrderAsync(orderId, FailedAmount);
+        using var consumer = CreateCancelledConsumer();
+
+        var committed = await consumer.HandleMessageAsync(OrderCancelledJson(orderId, Guid.NewGuid()), CancellationToken.None);
+
+        Assert.True(committed);
+        var row = await LoadAsync(orderId);
+        Assert.Equal(PaymentStatus.Failed, row.Status);
+        Assert.Null(row.RefundedAt);
+        Assert.Null(row.RefundSourceEventId);
+        Assert.Empty(Publisher.PublishedRefunds);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_SecondCancellation_DoesNotRefundTwice()
+    {
+        var orderId = Guid.NewGuid();
+        await PlaceOrderAsync(orderId, ProcessedAmount);
+        var firstEventId = Guid.NewGuid();
+        using var consumer = CreateCancelledConsumer();
+
+        Assert.True(await consumer.HandleMessageAsync(OrderCancelledJson(orderId, firstEventId), CancellationToken.None));
+        var afterFirst = await LoadAsync(orderId);
+        // Same message redelivered, then a re-publish of the cancellation with a new eventId.
+        Assert.True(await consumer.HandleMessageAsync(OrderCancelledJson(orderId, firstEventId), CancellationToken.None));
+        Assert.True(await consumer.HandleMessageAsync(OrderCancelledJson(orderId, Guid.NewGuid()), CancellationToken.None));
+
+        var row = await LoadAsync(orderId);
+        Assert.Equal(PaymentStatus.Refunded, row.Status);
+        Assert.Equal(firstEventId, row.RefundSourceEventId);
+        Assert.Equal(afterFirst.RefundedAt, row.RefundedAt);
+        Assert.Single(Publisher.PublishedRefunds);
+    }
+
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("""{ "eventId": "6f1d2c3b-1111-4000-8000-000000000001", "version": 1 }""")]
+    public async Task HandleMessageAsync_MalformedMessage_IsCommitted(string rawMessage)
+    {
+        using var consumer = CreateCancelledConsumer();
+
+        Assert.True(await consumer.HandleMessageAsync(rawMessage, CancellationToken.None));
+        Assert.Empty(Publisher.PublishedRefunds);
+    }
+
+    [Fact]
+    public async Task SaveRefundAsync_Concurrent_OnlyOneSucceeds()
+    {
+        var orderId = Guid.NewGuid();
+        await PlaceOrderAsync(orderId, ProcessedAmount);
+
+        await using var contextA = CreateDbContext();
+        await using var contextB = CreateDbContext();
+        var repositoryA = new PaymentRepository(contextA);
+        var repositoryB = new PaymentRepository(contextB);
+        var paymentA = (await repositoryA.GetByOrderIdAsync(orderId, CancellationToken.None))!;
+        var paymentB = (await repositoryB.GetByOrderIdAsync(orderId, CancellationToken.None))!;
+        paymentA.Refund(Guid.NewGuid(), DateTimeOffset.UtcNow);
+        paymentB.Refund(Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        var results = await Task.WhenAll(
+            repositoryA.SaveRefundAsync(paymentA, CancellationToken.None),
+            repositoryB.SaveRefundAsync(paymentB, CancellationToken.None));
+
+        Assert.Single(results, saved => saved);
+        Assert.Equal(PaymentStatus.Refunded, (await LoadAsync(orderId)).Status);
+    }
+
     private async Task PlaceOrderAsync(Guid orderId, decimal amount)
     {
         using var consumer = new OrderPlacedConsumer(

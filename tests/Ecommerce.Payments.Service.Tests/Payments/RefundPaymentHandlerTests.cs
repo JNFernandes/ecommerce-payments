@@ -136,6 +136,95 @@ public class RefundPaymentHandlerTests
     }
 
     [Fact]
+    public async Task Should_Ignore_And_Log_Information_When_No_Payment_Exists()
+    {
+        Stored(null);
+        var cancellation = Cancellation(Guid.NewGuid());
+
+        var logger = await HandleAndCaptureLogsAsync(cancellation);
+
+        AssertIgnoredWithSingleInformationLog(logger, cancellation, "no payment exists");
+        _repository.Verify(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(PaymentStatus.Failed, "never completed")]
+    [InlineData(PaymentStatus.Pending, "never completed")]
+    [InlineData(PaymentStatus.Refunded, "already refunded")]
+    public async Task Should_Ignore_And_Log_Information_When_Payment_Not_Refundable(PaymentStatus status, string expectedText)
+    {
+        var cancellation = Cancellation(Guid.NewGuid());
+        var payment = StoredPayment(cancellation.AggregateId, status, refundSourceEventId: status == PaymentStatus.Refunded ? Guid.NewGuid() : null);
+        Stored(payment);
+
+        var logger = await HandleAndCaptureLogsAsync(cancellation);
+
+        AssertIgnoredWithSingleInformationLog(logger, cancellation, expectedText);
+        Assert.Equal(status, payment.Status);
+        _repository.Verify(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Should_Log_Information_For_Duplicate_EventId()
+    {
+        var cancellation = Cancellation(Guid.NewGuid());
+        Stored(StoredPayment(cancellation.AggregateId, PaymentStatus.Refunded, refundSourceEventId: cancellation.EventId));
+
+        var logger = await HandleAndCaptureLogsAsync(cancellation);
+
+        AssertIgnoredWithSingleInformationLog(logger, cancellation, "duplicate delivery");
+    }
+
+    [Fact]
+    public async Task Should_Not_Publish_When_Refund_Was_Saved_Concurrently()
+    {
+        var cancellation = Cancellation(Guid.NewGuid());
+        Stored(StoredPayment(cancellation.AggregateId, PaymentStatus.Processed));
+        _repository
+            .Setup(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        var logger = await HandleAndCaptureLogsAsync(cancellation);
+
+        AssertIgnoredWithSingleInformationLog(logger, cancellation, "already refunded");
+        _repository.Verify(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    private async Task<ListLogger<RefundPaymentHandler>> HandleAndCaptureLogsAsync(OrderCancelledEvent cancellation)
+    {
+        var logger = new ListLogger<RefundPaymentHandler>();
+        await CreateHandler(logger).HandleAsync(cancellation, CancellationToken.None);
+        return logger;
+    }
+
+    private void AssertIgnoredWithSingleInformationLog(
+        ListLogger<RefundPaymentHandler> logger,
+        OrderCancelledEvent cancellation,
+        string expectedText)
+    {
+        _publisher.Verify(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
+        var (level, message) = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, level);
+        Assert.Contains(expectedText, message, StringComparison.Ordinal);
+        Assert.Contains(cancellation.AggregateId.ToString(), message, StringComparison.Ordinal);
+        Assert.Contains(cancellation.EventId.ToString(), message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Captures log entries (level + rendered message).</summary>
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    [Fact]
     public async Task Should_Retry_Transient_Load_Failure()
     {
         var orderId = Guid.NewGuid();

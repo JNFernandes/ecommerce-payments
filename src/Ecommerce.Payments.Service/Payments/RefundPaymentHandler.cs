@@ -53,6 +53,11 @@ public sealed class RefundPaymentHandler
 
             if (payment is null)
             {
+                _logger.LogInformation(
+                    "Ignoring OrderCancelled {EventId} for order {OrderId}: no payment exists for the order (reason: {Reason}).",
+                    orderCancelled.EventId,
+                    orderId,
+                    orderCancelled.Reason);
                 return;
             }
 
@@ -60,20 +65,30 @@ public sealed class RefundPaymentHandler
             // caused the refund.
             if (payment.RefundSourceEventId == orderCancelled.EventId)
             {
+                _logger.LogInformation(
+                    "Ignoring OrderCancelled {EventId} for order {OrderId}: duplicate delivery; payment {PaymentId} " +
+                    "was already refunded by it.",
+                    orderCancelled.EventId,
+                    orderId,
+                    payment.Id);
                 return;
             }
 
             var decision = payment.RequestRefund(orderCancelled.EventId, _timeProvider.GetUtcNow());
-            if (decision is not RefundDecision.Refunded refundedDecision)
+            if (decision is RefundDecision.Ignored ignored)
             {
+                LogIgnored(orderCancelled, payment, ignored.Reason);
                 return;
             }
 
+            var refundedDecision = (RefundDecision.Refunded)decision;
             var saved = await PersistenceRetry.Pipeline.ExecuteAsync(
                 async ct => await _repository.SaveRefundAsync(payment, ct),
                 cancellationToken);
             if (!saved)
             {
+                // Another delivery refunded it between our read and our conditional update.
+                LogIgnored(orderCancelled, payment, RefundIgnoredReason.AlreadyRefunded);
                 return;
             }
 
@@ -91,5 +106,27 @@ public sealed class RefundPaymentHandler
         }
 
         await _publisher.PublishRefundedAsync(refunded, cancellationToken);
+    }
+
+    private void LogIgnored(OrderCancelledEvent orderCancelled, Payment payment, RefundIgnoredReason reason)
+    {
+        if (reason == RefundIgnoredReason.AlreadyRefunded)
+        {
+            _logger.LogInformation(
+                "Ignoring OrderCancelled {EventId} for order {OrderId}: payment {PaymentId} was already refunded.",
+                orderCancelled.EventId,
+                orderCancelled.AggregateId,
+                payment.Id);
+            return;
+        }
+
+        _logger.LogInformation(
+            "Ignoring OrderCancelled {EventId} for order {OrderId}: payment {PaymentId} is {Status} and was never " +
+            "completed; nothing to refund (reason: {Reason}).",
+            orderCancelled.EventId,
+            orderCancelled.AggregateId,
+            payment.Id,
+            payment.Status,
+            orderCancelled.Reason);
     }
 }
