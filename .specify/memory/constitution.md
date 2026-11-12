@@ -1,3 +1,45 @@
+<!--
+Sync Impact Report
+==================
+Version change: 1.0.0 → 1.1.0 (MINOR — materially expanded guidance, no principle removed or
+redefined)
+
+Modified principles:
+- I. Domain-Driven Design & Layered Architecture — Domain: added `REFUNDED` status,
+  `Payment.Refund()`, `PaymentRefunded` domain event and the "refund only from Processed" rule.
+- II. Event-Driven Write Flow Integrity — write flow now also applies to `OrderCancelled`;
+  idempotency clarified (dedupe by `eventId`, order identified by `aggregateId`).
+- VI. Kafka Consumption & Event Publishing — consumption of `orders.order-cancelled`;
+  `PaymentRefunded` → `payments.payment-refunded`; payment events carry `aggregateId` = payment
+  id plus a separate `orderId`; refund rules; dead-letter retry worker; startup independence
+  from Kafka.
+
+Added sections:
+- VI → "Refund rules", "Dead-letter retry", "Startup & broker availability" subsections.
+
+Removed sections: none.
+
+Other changes:
+- Technology Stack: added "Local infrastructure: ecommerce-infra (docker compose)".
+- Documentation Standards: `OrderCancelled` consumed, `PaymentRefunded` published; every new
+  background service documented in the project README.
+
+Templates / runtime docs:
+- ✅ .specify/templates/plan-template.md — "Constitution Check" gates are derived from this file
+  at plan time; no hard-coded principles to update.
+- ✅ .specify/templates/spec-template.md — no constitution-specific constraints; no change.
+- ✅ .specify/templates/tasks-template.md — generic task categories; no change.
+- ✅ .specify/templates/commands/*.md — directory not present in this repo; nothing to check.
+- ✅ README.md — updated in a separate commit (architecture, event flow, ecommerce-infra).
+- ✅ CLAUDE.md — added in a separate commit, aligned with v1.1.0.
+- ⚠ specs/ — existing feature specs (001, 002) intentionally not modified; US-03 / US-04 specs
+  will be written against v1.1.0.
+
+Follow-up TODOs:
+- Code does not yet implement v1.1.0 additions (OrderCancelled consumer, Refund, dead-letter
+  retry worker + new dead-letter columns, Kafka-independent startup). Tracked by US-03 and US-04.
+-->
+
 # ecommerce-payments Constitution
 
 ## Core Principles
@@ -35,14 +77,17 @@ one class, or calling a layer out of order is a constitutional violation.
 
 - **Domain** (`Domain/`)
   - Sole home of all business logic. `Payment` is the aggregate root.
-  - `PaymentStatus` enum: `PENDING`, `PROCESSED`, `FAILED`. Bare strings for status are
-    prohibited.
+  - `PaymentStatus` enum: `PENDING`, `PROCESSED`, `FAILED`, `REFUNDED`. Bare strings for status
+    are prohibited.
   - Domain methods encapsulate all state transitions and invariants, e.g. `Payment.Process()`,
-    `Payment.Fail(reason)`. External code MUST NOT mutate `Payment` state directly (no public
-    setters on status).
-  - Raises domain events (`PaymentProcessed`, `PaymentFailed`) as part of executing a state
-    transition. Domain events are in-process objects at this stage — they are not yet Kafka
-    messages.
+    `Payment.Fail(reason)`, `Payment.Refund()`. External code MUST NOT mutate `Payment` state
+    directly (no public setters on status).
+  - **Refund rule:** a payment MAY only be refunded from the `PROCESSED` state
+    (`PROCESSED → REFUNDED`). The Domain is the only place this rule is decided; see Principle VI
+    "Refund rules" for how ignorable refund requests are handled without throwing.
+  - Raises domain events (`PaymentProcessed`, `PaymentFailed`, `PaymentRefunded`) as part of
+    executing a state transition. Domain events are in-process objects at this stage — they are
+    not yet Kafka messages.
   - MUST be plain C# — no dependency on EF Core, Confluent.Kafka, or `.NET Worker` types. Domain
     tests MUST be able to run with zero infrastructure.
 
@@ -77,6 +122,10 @@ The write flow MUST follow this exact sequence and MUST NOT deviate:
 6. **Consumer** commits the Kafka offset only after step 5 (or after step 4 + dead-letter
    handling, see below) completes.
 
+The same sequence applies to `OrderCancelled` from `orders.order-cancelled`: Domain executes
+`Payment.Refund()` and raises `PaymentRefunded`, the Repository saves first, and only then is
+`PaymentRefunded` published to `payments.payment-refunded`.
+
 **Failure handling:**
 - If the DB save (step 4) fails: **no Kafka publish MUST occur.** Log the error with full
   context and retry the DB save (with backoff) before falling back to dead-letter. Do not
@@ -90,10 +139,12 @@ The write flow MUST follow this exact sequence and MUST NOT deviate:
 
 **Idempotency (NON-NEGOTIABLE):**
 - Kafka delivery is at-least-once. The Consumer → Service path MUST be idempotent: processing
-  the same `OrderPlaced` message (same `eventId`/`aggregateId`) twice MUST NOT create a
-  duplicate `Payment` or publish a duplicate event. Use the inbound event's `eventId` (or the
-  order's aggregate id) as a deduplication key checked by the Service/Repository before domain
-  execution.
+  the same `OrderPlaced` or `OrderCancelled` message twice MUST NOT create a duplicate `Payment`,
+  apply a duplicate state transition, or publish a duplicate event.
+- In order events the order is identified by `aggregateId` (the order id). At most one `Payment`
+  exists per order: the order's `aggregateId` is the idempotency key for payment creation.
+- Consumers MUST deduplicate redelivered messages by the inbound event's `eventId`, checked by
+  the Service/Repository before domain execution.
 
 ### III. Type Safety & Input Validation
 
@@ -145,7 +196,10 @@ Test names MUST describe the behaviour, e.g. `Should_Publish_PaymentProcessed_Af
 This service is **both a consumer and a producer** of domain/integration events.
 
 **Consumption rules:**
-- Consumes `OrderPlaced` from topic `orders.order-placed`.
+- Consumes `OrderPlaced` from topic `orders.order-placed` (to create and process a payment).
+- Consumes `OrderCancelled` from topic `orders.order-cancelled` (to refund a processed payment).
+- In order events the order is identified by `aggregateId` (the order id).
+- Consumers MUST deduplicate by `eventId` (Principle II).
 - Consumer group and offset commit strategy MUST guarantee at-least-once delivery combined with
   the idempotency guarantee in Principle II.
 - Failed message processing MUST be retried with exponential backoff before being routed to a
@@ -154,13 +208,18 @@ This service is **both a consumer and a producer** of domain/integration events.
 **Publishing rules:**
 - Publishes `PaymentProcessed` to `payments.payment-processed`.
 - Publishes `PaymentFailed` to `payments.payment-failed`.
+- Publishes `PaymentRefunded` to `payments.payment-refunded`.
+- Every payment event carries `aggregateId` = the **payment** id and a separate `orderId` field
+  = the order id. Downstream consumers MUST use `orderId` (never `aggregateId`) to identify the
+  order.
 - Each domain event maps to exactly one Kafka topic.
 - Topics follow the naming convention: `payments.<event-name>` in kebab-case.
 - Events MUST only be published after a confirmed PostgreSQL save (Principle II).
 
 **Event payload rules:**
 - Every event MUST include: `eventId` (UUID), `occurredAt` (ISO timestamp), `aggregateId`
-  (payment/order UUID), and `version` (integer).
+  (UUID of the event's own aggregate — the payment id for events published by this service),
+  and `version` (integer). Payment events additionally MUST include `orderId` (UUID).
 - Payloads MUST be serialized as JSON.
 - Breaking changes to a payload schema require a new topic version (e.g.
   `payments.payment-processed.v2`).
@@ -171,6 +230,27 @@ This service is **both a consumer and a producer** of domain/integration events.
 - Failed events MUST be stored in a dead-letter table in PostgreSQL for retry.
 - A Kafka publish failure MUST NOT cause the already-persisted `Payment` state to be rolled back
   — the DB save already succeeded and is the source of truth.
+
+**Refund rules:**
+- A payment MAY only be refunded from the `PROCESSED` state (Principle I).
+- A refund request (`OrderCancelled`) for a payment that is `FAILED`, already `REFUNDED`, or not
+  found MUST be ignored: logged with full context, offset committed, no state change, no event
+  published. It MUST NEVER throw out of the Consumer/Service path.
+
+**Dead-letter retry:**
+- Dead-letter rows MUST carry: `status` (`PendingRetry`, `Resolved`, `Exhausted`), retry count,
+  next retry time, and last error, in addition to the event type and serialized payload.
+- A background worker MUST periodically retry due rows (`status = PendingRetry` and next retry
+  time ≤ now), using exponential backoff between attempts and a configured maximum retry count.
+  A successful publish marks the row `Resolved`; reaching the maximum marks it `Exhausted`.
+- Rows MUST be claimed so that several service instances never process the same row
+  (`SELECT … FOR UPDATE SKIP LOCKED` in PostgreSQL).
+- A retry MUST republish the original payload unchanged, keeping the original `eventId` so
+  downstream consumers can deduplicate.
+
+**Startup & broker availability:**
+- Application startup MUST NOT depend on Kafka being reachable. Kafka connectivity problems
+  MUST be logged and retried in the background; they MUST NOT crash or block host startup.
 
 ### VII. Branching Strategy
 
@@ -248,6 +328,7 @@ The project MUST compile and pass all quality checks at all times.
 | Testing | xUnit + Moq + testcontainers-dotnet |
 | Linting/Formatting | `dotnet format` + Roslyn analyzers |
 | Containerization | Docker + docker-compose |
+| Local infrastructure | `ecommerce-infra` (docker compose) |
 
 Introducing a new runtime dependency that duplicates a capability already provided by the stack
 above requires an ADR in `docs/adr/` before the PR can be merged.
@@ -256,12 +337,14 @@ above requires an ADR in `docs/adr/` before the PR can be merged.
 
 All public classes and methods MUST carry XML doc comments describing what the class/method
 does, its inputs, and its outputs.
-Kafka event payloads (`OrderPlaced` consumed; `PaymentProcessed`, `PaymentFailed` published)
-MUST be documented inline in the event class XML doc comments, including field names, types,
-and semantics.
+Kafka event payloads (`OrderPlaced`, `OrderCancelled` consumed; `PaymentProcessed`,
+`PaymentFailed`, `PaymentRefunded` published) MUST be documented inline in the event class XML
+doc comments, including field names, types, and semantics.
 Each project/module MUST include a `README.md` describing its responsibility, the topics it
 consumes/produces, and its position in the Consumer → Service → Domain → Repository → Publisher
 flow.
+Each new background service (hosted service / worker, e.g. a consumer or the dead-letter retry
+worker) MUST be documented in the project root `README.md`.
 Architectural decisions MUST be recorded as ADRs in `docs/adr/` using the standard template
 (Context / Decision / Consequences).
 
@@ -283,4 +366,4 @@ note if existing code must change.
 Reviewers are empowered to block merges for violations without exception. New principles take
 effect immediately upon merge.
 
-**Version**: 1.0.0 | **Ratified**: 2026-07-08 | **Last Amended**: 2026-07-08
+**Version**: 1.1.0 | **Ratified**: 2026-07-08 | **Last Amended**: 2026-11-12
