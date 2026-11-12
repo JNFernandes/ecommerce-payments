@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using Testcontainers.Kafka;
 using Testcontainers.PostgreSql;
 
@@ -72,6 +73,74 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         Assert.NotNull(row.ResolvedAt);
         Assert.Equal(0, row.RetryCount);
         Assert.Equal(deadLetter.Payload, row.Payload);
+    }
+
+    [Fact]
+    public async Task Should_Back_Off_After_Failed_Retry_Then_Resolve_When_Publish_Succeeds()
+    {
+        var deadLetter = await DeadLetterViaFailedPublishAsync(Guid.NewGuid());
+        // Whole seconds (PostgreSQL stores microseconds, .NET ticks are 100 ns) and after the row's
+        // NextRetryAt, so the row is due on the first cycle.
+        var startAt = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 1);
+        var clock = new FakeTimeProvider(startAt);
+
+        await using var provider = BuildServiceProvider(
+            _kafka.GetBootstrapAddress(),
+            clock,
+            sp => new FailFirstPublishes(sp.GetRequiredService<PaymentEventPublisher>(), failures: 1));
+
+        // Cycle 1: the retry itself fails → bookkeeping on the same row, 5 s backoff.
+        Assert.Equal(1, await RunCycleAsync(provider));
+        var afterFailure = await LoadAsync(deadLetter.Id);
+        Assert.Equal(DeadLetterStatus.PendingRetry, afterFailure.Status);
+        Assert.Equal(1, afterFailure.RetryCount);
+        Assert.Equal(clock.GetUtcNow().AddSeconds(5), afterFailure.NextRetryAt);
+        Assert.False(string.IsNullOrEmpty(afterFailure.LastError));
+        Assert.Equal(1, await CountDeadLettersAsync());
+
+        // Not due yet.
+        clock.Advance(TimeSpan.FromSeconds(4));
+        Assert.Equal(0, await RunCycleAsync(provider));
+
+        // Due: publish succeeds against real Kafka.
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, await RunCycleAsync(provider));
+
+        var resolved = await LoadAsync(deadLetter.Id);
+        Assert.Equal(DeadLetterStatus.Resolved, resolved.Status);
+        Assert.Equal(clock.GetUtcNow(), resolved.ResolvedAt);
+        Assert.Equal(1, resolved.RetryCount);
+
+        var published = KafkaTestConsumer.SubscribeAndConsume<string>(
+            _kafka.GetBootstrapAddress(), PaymentProcessedTopic, TimeSpan.FromSeconds(30));
+        Assert.NotNull(published);
+        Assert.Equal(EventIdOf(deadLetter.Payload), EventIdOf(published.Message.Value));
+        Assert.Equal(1, await CountDeadLettersAsync());
+    }
+
+    private static async Task<int> RunCycleAsync(ServiceProvider provider)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<IDeadLetterRetryProcessor>()
+            .RunCycleAsync(CancellationToken.None);
+    }
+
+    private async Task<int> CountDeadLettersAsync()
+    {
+        await using var dbContext = new PaymentsDbContext(
+            new DbContextOptionsBuilder<PaymentsDbContext>().UseNpgsql(_postgres.GetConnectionString()).Options);
+        return await dbContext.PaymentDeadLetters.CountAsync();
+    }
+
+    /// <summary>Fault injection: throws for the first <c>failures</c> publishes, then delegates.</summary>
+    private sealed class FailFirstPublishes(IRawEventPublisher inner, int failures) : IRawEventPublisher
+    {
+        private int _remainingFailures = failures;
+
+        public Task PublishRawAsync(string topic, string key, string payload, CancellationToken cancellationToken) =>
+            Interlocked.Decrement(ref _remainingFailures) >= 0
+                ? Task.FromException(new InvalidOperationException("Simulated broker outage"))
+                : inner.PublishRawAsync(topic, key, payload, cancellationToken);
     }
 
     /// <summary>
