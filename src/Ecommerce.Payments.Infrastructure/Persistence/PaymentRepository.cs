@@ -47,6 +47,21 @@ public sealed class PaymentRepository : IPaymentRepository
         _dbContext.Payments.AnyAsync(p => p.OrderId == orderId, cancellationToken);
 
     /// <inheritdoc />
+    public async Task<bool> SaveRefundAsync(Payment payment, CancellationToken cancellationToken)
+    {
+        var updated = await _dbContext.Payments
+            .Where(p => p.Id == payment.Id && p.Status == PaymentStatus.Processed)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(p => p.Status, PaymentStatus.Refunded)
+                    .SetProperty(p => p.RefundedAt, payment.RefundedAt)
+                    .SetProperty(p => p.RefundSourceEventId, payment.RefundSourceEventId),
+                cancellationToken);
+
+        return updated == 1;
+    }
+
+    /// <inheritdoc />
     public async Task<Payment?> GetByOrderIdAsync(Guid orderId, CancellationToken cancellationToken)
     {
         var entity = await _dbContext.Payments
