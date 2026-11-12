@@ -72,7 +72,7 @@ downstream consumers must use `orderId` to identify the order.
 | Hosted service | Responsibility | Status |
 |---|---|---|
 | `OrderPlacedConsumer` | Consumes `orders.order-placed` and runs the payment write flow. | Implemented |
-| Dead-letter retry worker | Republishes `payment_dead_letters` rows with exponential backoff and a max retry count, claiming rows with `FOR UPDATE SKIP LOCKED` ([ADR 0003](docs/adr/0003-dead-letter-retry.md)). | Planned (US-03) |
+| `DeadLetterRetryWorker` | Every `DeadLetterRetry:IntervalMs`, republishes due `payment_dead_letters` rows unchanged (same topic, key and `eventId`) with exponential backoff, marking them `Resolved` or `Exhausted` after `MaxRetries`; claims rows with `FOR UPDATE SKIP LOCKED` so several instances are safe. See [docs/dead-letter-retry.md](docs/dead-letter-retry.md) and [ADR 0003](docs/adr/0003-dead-letter-retry.md). | Implemented (US-03) |
 | `OrderCancelled` consumer | Refunds `Processed` payments when an order is cancelled. | Planned (US-04) |
 
 ## Project layout
@@ -82,13 +82,16 @@ src/
   Ecommerce.Payments.Consumer/        Worker Service host, Kafka consumers
   Ecommerce.Payments.Service/         Application/handler layer
   Ecommerce.Payments.Domain/          Payment aggregate, domain events, business rules
-  Ecommerce.Payments.Infrastructure/  EF Core repository, Kafka publisher, migrations
+  Ecommerce.Payments.Infrastructure/  EF Core repositories, Kafka publisher, dead-letter retry worker, migrations
 tests/
-  Ecommerce.Payments.Domain.Tests/       Unit tests, no infrastructure
-  Ecommerce.Payments.Service.Tests/      Unit tests with mocked Repository/Publisher
+  Ecommerce.Payments.Domain.Tests/          Unit tests, no infrastructure
+  Ecommerce.Payments.Service.Tests/         Unit tests with mocked Repository/Publisher
+  Ecommerce.Payments.Infrastructure.Tests/  Unit tests for dead-letter retry policy/processor/worker (fake clock)
   Ecommerce.Payments.Integration.Tests/  Consumer → Repository against Testcontainers Postgres
   Ecommerce.Payments.Component.Tests/    Full flow against Testcontainers Postgres + Kafka
-docs/adr/                             Architecture Decision Records
+docs/
+  adr/                                Architecture Decision Records
+  dead-letter-retry.md                Dead-letter states, settings, example SQL
 specs/
   NNN-feature-name/                   Spec-Kit artifacts (spec, plan, tasks) per user story
 ```
@@ -172,6 +175,12 @@ dotnet test
 | `Kafka:OrderPlacedTopic` | Inbound topic |
 | `Kafka:PaymentProcessedTopic` / `Kafka:PaymentFailedTopic` | Outbound topics |
 | `PaymentPolicy:MaxAmountThreshold` | Amount above which a payment fails instead of processing |
+| `DeadLetterRetry:IntervalMs` | Time between dead-letter retry cycles (default `30000`) |
+| `DeadLetterRetry:BatchSize` | Maximum rows retried per cycle (default `20`) |
+| `DeadLetterRetry:BaseDelayMs` / `DeadLetterRetry:MaxDelayMs` | Exponential backoff base and cap (defaults `5000` / `600000`) |
+| `DeadLetterRetry:MaxRetries` | Failed retries before a row is `Exhausted` (default `8`) |
+
+Details: [docs/dead-letter-retry.md](docs/dead-letter-retry.md).
 
 ## Workflow
 

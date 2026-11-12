@@ -5,17 +5,21 @@ namespace Ecommerce.Payments.Infrastructure.Persistence;
 
 /// <summary>
 /// EF Core context for the payments schema — the <c>payments</c> table (with its idempotency
-/// unique index on <c>order_id</c>) and the <c>payment_dead_letters</c> table.
+/// unique index on <c>order_id</c>) and the <c>payment_dead_letters</c> table (with its partial
+/// due-row index used by the dead-letter retry worker).
 /// </summary>
 public sealed class PaymentsDbContext : DbContext
 {
+    /// <summary>Creates the context with the given options.</summary>
     public PaymentsDbContext(DbContextOptions<PaymentsDbContext> options)
         : base(options)
     {
     }
 
+    /// <summary>The <c>payments</c> table.</summary>
     public DbSet<PaymentEntity> Payments => Set<PaymentEntity>();
 
+    /// <summary>The <c>payment_dead_letters</c> table: events that failed to publish, with retry bookkeeping.</summary>
     public DbSet<PaymentDeadLetterEntity> PaymentDeadLetters => Set<PaymentDeadLetterEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

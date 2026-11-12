@@ -142,13 +142,13 @@ sets, and the second returns immediately while the first still holds its locks.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T034 [P] Write `docs/dead-letter-retry.md` **(new)**: purpose, link to `docs/adr/0003-dead-letter-retry.md`, state diagram and meaning of `PendingRetry`/`Resolved`/`Exhausted`, the settings table with defaults and env-var overrides, backoff schedule with defaults, multi-instance claiming, at-least-once/`eventId` note, out-of-scope items, useful queries (list exhausted rows), and an example SQL `INSERT INTO payment_dead_letters (...)` creating a due `PendingRetry` `PaymentProcessedEvent` row with a valid JSON payload
-- [ ] T035 [P] Update `src/Ecommerce.Payments.Infrastructure/README.md` (DeadLetters folder, `PaymentDeadLetterRepository`, `IRawEventPublisher`) and `src/Ecommerce.Payments.Consumer/README.md` (hosted services incl. `DeadLetterRetryWorker`, `DeadLetterRetry` settings)
-- [ ] T036 [P] Update root `README.md`: Background services table → dead-letter retry worker "Implemented (US-03)", configuration reference rows for `DeadLetterRetry:*`, link to `docs/dead-letter-retry.md`; add `tests/Ecommerce.Payments.Infrastructure.Tests/` to the project layout
-- [ ] T037 [P] Update `CLAUDE.md`: dead-letter retry worker and settings in the write-flow section (link `docs/dead-letter-retry.md`, ADR 0003), the new test project, and the rule that retry paths use `IRawEventPublisher` (never the dead-lettering methods)
-- [ ] T038 Verify XML doc comments exist on every new/changed public type and member in `src/Ecommerce.Payments.Infrastructure/DeadLetters/`, `src/Ecommerce.Payments.Infrastructure/Persistence/` and `src/Ecommerce.Payments.Infrastructure/Messaging/`
-- [ ] T039 Run the manual scenario in `specs/003-dead-letter-retry/quickstart.md` §2 against ecommerce-infra (insert via the docs SQL, confirm `Resolved` and the message on the topic; stop Kafka and observe backoff; start the service with Kafka down)
-- [ ] T040 Final quality gate: `dotnet build`, `dotnet format --verify-no-changes`, `dotnet test` all green; `docker build -t ecommerce-payments .` still succeeds
+- [X] T034 [P] Write `docs/dead-letter-retry.md` **(new)**: purpose, link to `docs/adr/0003-dead-letter-retry.md`, state diagram and meaning of `PendingRetry`/`Resolved`/`Exhausted`, the settings table with defaults and env-var overrides, backoff schedule with defaults, multi-instance claiming, at-least-once/`eventId` note, out-of-scope items, useful queries (list exhausted rows), and an example SQL `INSERT INTO payment_dead_letters (...)` creating a due `PendingRetry` `PaymentProcessedEvent` row with a valid JSON payload
+- [X] T035 [P] Update `src/Ecommerce.Payments.Infrastructure/README.md` (DeadLetters folder, `PaymentDeadLetterRepository`, `IRawEventPublisher`) and `src/Ecommerce.Payments.Consumer/README.md` (hosted services incl. `DeadLetterRetryWorker`, `DeadLetterRetry` settings)
+- [X] T036 [P] Update root `README.md`: Background services table → dead-letter retry worker "Implemented (US-03)", configuration reference rows for `DeadLetterRetry:*`, link to `docs/dead-letter-retry.md`; add `tests/Ecommerce.Payments.Infrastructure.Tests/` to the project layout
+- [X] T037 [P] Update `CLAUDE.md`: dead-letter retry worker and settings in the write-flow section (link `docs/dead-letter-retry.md`, ADR 0003), the new test project, and the rule that retry paths use `IRawEventPublisher` (never the dead-lettering methods)
+- [X] T038 Verify XML doc comments exist on every new/changed public type and member in `src/Ecommerce.Payments.Infrastructure/DeadLetters/`, `src/Ecommerce.Payments.Infrastructure/Persistence/` and `src/Ecommerce.Payments.Infrastructure/Messaging/`
+- [ ] T039 **(partially done — see note)** Run the manual scenario in `specs/003-dead-letter-retry/quickstart.md` §2 against ecommerce-infra (insert via the docs SQL, confirm `Resolved` and the message on the topic; stop Kafka and observe backoff; start the service with Kafka down)
+- [X] T040 Final quality gate: `dotnet build`, `dotnet format --verify-no-changes`, `dotnet test` all green; `docker build -t ecommerce-payments .` still succeeds
 
 ---
 
@@ -198,3 +198,24 @@ T034 docs/dead-letter-retry.md  |  T035 project READMEs  |  T036 root README  | 
 4. **Polish**: docs, README/CLAUDE.md, manual validation, final gate.
 
 Commit after each task or logical group, with the quality gate green every time.
+
+## Implementation notes
+
+- **T039 (manual scenario) — partially done.** The example SQL from `docs/dead-letter-retry.md`
+  was run against a throwaway PostgreSQL container migrated to the latest schema (INSERT and
+  both queries succeed; the row is a due `PendingRetry`). The end-to-end scenarios (republish to
+  real Kafka, backoff then success, startup with an unreachable broker) are covered by the
+  Component tests. The steps against the shared `ecommerce-infra` stack (applying the migration
+  to the shared database, stopping the shared Kafka broker) were **not** run, because a local
+  `Ecommerce.Payments.Consumer` instance was already running against that stack and stopping
+  Kafka would affect the other services. Run quickstart.md §2 manually to close this task.
+- **Quality gate configuration**: the running local Consumer process locked
+  `src/Ecommerce.Payments.Consumer/bin/Debug`, so the gate was run with `-c Release`
+  (`dotnet build -c Release`, `dotnet format --verify-no-changes`, `dotnet test -c Release`).
+- **Bug found and fixed (T020)**: the single `PaymentEventPublisher` instance is registered under
+  three service types, and the DI container disposed it once per registration; the second
+  `Dispose` threw from `Producer.Flush`. `Dispose` is now idempotent.
+- **T001**: `Microsoft.Extensions.Hosting.Abstractions` pinned to 10.0.4 instead of 10.0.9 to
+  match the existing `Microsoft.Extensions.Options` 10.0.4 (10.0.9 caused an NU1605 downgrade
+  error treated as an error).
+- **T025**: `IDeadLetterRetryProcessor` was extracted so the worker can be tested with a mock.
