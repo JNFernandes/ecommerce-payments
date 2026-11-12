@@ -15,9 +15,16 @@ internal static class KafkaTestConsumer
     public static ConsumeResult<Ignore, string>? SubscribeAndConsume(
         string bootstrapServers,
         string topic,
+        TimeSpan timeout) =>
+        SubscribeAndConsume<Ignore>(bootstrapServers, topic, timeout);
+
+    /// <summary>Same as the non-generic overload, but also deserializes the message key.</summary>
+    public static ConsumeResult<TKey, string>? SubscribeAndConsume<TKey>(
+        string bootstrapServers,
+        string topic,
         TimeSpan timeout)
     {
-        using var consumer = new ConsumerBuilder<Ignore, string>(new ConsumerConfig
+        using var consumer = new ConsumerBuilder<TKey, string>(new ConsumerConfig
         {
             BootstrapServers = bootstrapServers,
             GroupId = $"component-tests-assert-{Guid.NewGuid()}",

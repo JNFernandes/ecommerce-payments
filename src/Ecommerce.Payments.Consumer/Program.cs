@@ -38,7 +38,10 @@ builder.Services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredServic
 builder.Services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
 builder.Services.AddScoped<ProcessPaymentHandler>();
 
+builder.Services.AddScoped<IDeadLetterRetryProcessor, DeadLetterRetryProcessor>();
+
 builder.Services.AddHostedService<OrderPlacedConsumer>();
+builder.Services.AddHostedService<DeadLetterRetryWorker>();
 
 var host = builder.Build();
 host.Run();

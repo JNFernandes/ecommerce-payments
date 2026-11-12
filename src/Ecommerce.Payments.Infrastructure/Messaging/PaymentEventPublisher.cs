@@ -31,6 +31,7 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<PaymentEventPublisher> _logger;
     private readonly IProducer<string, string> _producer;
+    private int _disposed;
 
     /// <summary>Creates the publisher and its long-lived Kafka producer (no broker connection is made here).</summary>
     public PaymentEventPublisher(
@@ -169,9 +170,18 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
             cancellationToken);
     }
 
-    /// <summary>Flushes pending messages (up to 10 s) and disposes the producer.</summary>
+    /// <summary>
+    /// Flushes pending messages (up to 10 s) and disposes the producer. Idempotent: the single
+    /// instance is registered under several service types, and the DI container disposes it once
+    /// per registration.
+    /// </summary>
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        {
+            return;
+        }
+
         _producer.Flush(TimeSpan.FromSeconds(10));
         _producer.Dispose();
     }
