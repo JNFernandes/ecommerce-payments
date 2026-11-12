@@ -1,6 +1,12 @@
+using System.Collections.Concurrent;
+using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Infrastructure.Persistence.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using Testcontainers.PostgreSql;
 
 namespace Ecommerce.Payments.Integration.Tests;
@@ -77,6 +83,121 @@ public class DeadLetterClaimTests : IAsyncLifetime
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => repository.ClaimDueAsync(Now, 1, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Two_Concurrent_Claimers_Get_Disjoint_Rows()
+    {
+        for (var i = 0; i < 6; i++)
+        {
+            await InsertAsync(Now.AddSeconds(-i - 1));
+        }
+
+        await using var contextA = CreateDbContext();
+        await using var contextB = CreateDbContext();
+        var repositoryA = new PaymentDeadLetterRepository(contextA);
+        var repositoryB = new PaymentDeadLetterRepository(contextB);
+        await using var transactionA = await repositoryA.BeginTransactionAsync(CancellationToken.None);
+        await using var transactionB = await repositoryB.BeginTransactionAsync(CancellationToken.None);
+
+        var claimedA = await repositoryA.ClaimDueAsync(Now, 3, CancellationToken.None);
+        var claimedB = await repositoryB.ClaimDueAsync(Now, 3, CancellationToken.None);
+
+        var idsA = claimedA.Select(r => r.Id).ToHashSet();
+        var idsB = claimedB.Select(r => r.Id).ToHashSet();
+        Assert.Equal(3, idsA.Count);
+        Assert.Equal(3, idsB.Count);
+        Assert.Empty(idsA.Intersect(idsB));
+    }
+
+    [Fact]
+    public async Task Second_Claimer_Skips_Locked_Row_Without_Waiting()
+    {
+        await InsertAsync(Now.AddSeconds(-1));
+
+        await using var contextA = CreateDbContext();
+        var repositoryA = new PaymentDeadLetterRepository(contextA);
+        await using var transactionA = await repositoryA.BeginTransactionAsync(CancellationToken.None);
+        Assert.Single(await repositoryA.ClaimDueAsync(Now, 1, CancellationToken.None));
+
+        await using var contextB = CreateDbContext();
+        var repositoryB = new PaymentDeadLetterRepository(contextB);
+        await using var transactionB = await repositoryB.BeginTransactionAsync(CancellationToken.None);
+        // If SKIP LOCKED were missing, this claim would block and then fail with a lock timeout.
+        await contextB.Database.ExecuteSqlRawAsync("SET LOCAL lock_timeout = '1s'");
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var claimedB = await repositoryB.ClaimDueAsync(Now, 1, CancellationToken.None);
+        stopwatch.Stop();
+
+        Assert.Empty(claimedB);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Claim waited {stopwatch.Elapsed}.");
+    }
+
+    [Fact]
+    public async Task Row_Is_Claimable_Again_After_First_Transaction_Rolls_Back()
+    {
+        var row = await InsertAsync(Now.AddSeconds(-1));
+
+        await using (var contextA = CreateDbContext())
+        {
+            var repositoryA = new PaymentDeadLetterRepository(contextA);
+            await using var transactionA = await repositoryA.BeginTransactionAsync(CancellationToken.None);
+            Assert.Single(await repositoryA.ClaimDueAsync(Now, 1, CancellationToken.None));
+            await transactionA.RollbackAsync();
+        }
+
+        var claimed = await ClaimInNewTransactionAsync(limit: 1);
+
+        Assert.Equal([row.Id], claimed.Select(r => r.Id));
+    }
+
+    [Fact]
+    public async Task Two_Processors_In_Parallel_Publish_Each_Row_Exactly_Once()
+    {
+        var rows = new List<PaymentDeadLetterEntity>();
+        for (var i = 0; i < 10; i++)
+        {
+            rows.Add(await InsertAsync(Now.AddSeconds(-i - 1)));
+        }
+
+        var publisher = new RecordingSlowPublisher(TimeSpan.FromMilliseconds(100));
+        await using var contextA = CreateDbContext();
+        await using var contextB = CreateDbContext();
+
+        await Task.WhenAll(
+            Task.Run(() => CreateProcessor(contextA, publisher).RunCycleAsync(CancellationToken.None)),
+            Task.Run(() => CreateProcessor(contextB, publisher).RunCycleAsync(CancellationToken.None)));
+
+        Assert.Equal(
+            rows.Select(r => r.MessageKey).Order(),
+            publisher.PublishedKeys.Order());
+
+        await using var readContext = CreateDbContext();
+        Assert.All(
+            await readContext.PaymentDeadLetters.AsNoTracking().ToListAsync(),
+            row => Assert.Equal(DeadLetterStatus.Resolved, row.Status));
+    }
+
+    private static DeadLetterRetryProcessor CreateProcessor(PaymentsDbContext dbContext, IRawEventPublisher publisher) => new(
+        new PaymentDeadLetterRepository(dbContext),
+        publisher,
+        Options.Create(new DeadLetterRetryOptions()),
+        new FakeTimeProvider(Now),
+        NullLogger<DeadLetterRetryProcessor>.Instance);
+
+    /// <summary>Records every publish; the delay widens the window in which both processors overlap.</summary>
+    private sealed class RecordingSlowPublisher(TimeSpan delay) : IRawEventPublisher
+    {
+        private readonly ConcurrentQueue<string> _publishedKeys = new();
+
+        public IEnumerable<string> PublishedKeys => _publishedKeys;
+
+        public async Task PublishRawAsync(string topic, string key, string payload, CancellationToken cancellationToken)
+        {
+            await Task.Delay(delay, cancellationToken);
+            _publishedKeys.Enqueue(key);
+        }
     }
 
     private async Task<IReadOnlyList<PaymentDeadLetterEntity>> ClaimInNewTransactionAsync(int limit)

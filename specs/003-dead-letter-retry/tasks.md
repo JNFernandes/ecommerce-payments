@@ -129,12 +129,12 @@ sets, and the second returns immediately while the first still holds its locks.
 
 ### Tests for User Story 3
 
-- [ ] T031 [P] [US3] Extend `tests/Ecommerce.Payments.Integration.Tests/DeadLetterClaimTests.cs`: `Two_Concurrent_Claimers_Get_Disjoint_Rows` (two `PaymentsDbContext`s, each with an open transaction, claim limit 3 over 6 due rows → no shared ids, union = 6), `Second_Claimer_Skips_Locked_Row_Without_Waiting` (first holds 1 row; second with `SET LOCAL lock_timeout = '1s'` returns 0 rows in < 1 s, no exception), `Row_Is_Claimable_Again_After_First_Transaction_Rolls_Back`
-- [ ] T032 [P] [US3] Integration test **(new case)** `Two_Processors_In_Parallel_Publish_Each_Row_Exactly_Once` in `tests/Ecommerce.Payments.Integration.Tests/DeadLetterClaimTests.cs`: two `DeadLetterRetryProcessor` instances (separate scopes/DbContexts) with a recording fake `IRawEventPublisher` that delays each publish ~100 ms, run `RunCycleAsync` concurrently over 10 due rows → every row published exactly once and all `Resolved`
+- [X] T031 [P] [US3] Extend `tests/Ecommerce.Payments.Integration.Tests/DeadLetterClaimTests.cs`: `Two_Concurrent_Claimers_Get_Disjoint_Rows` (two `PaymentsDbContext`s, each with an open transaction, claim limit 3 over 6 due rows → no shared ids, union = 6), `Second_Claimer_Skips_Locked_Row_Without_Waiting` (first holds 1 row; second with `SET LOCAL lock_timeout = '1s'` returns 0 rows in < 1 s, no exception), `Row_Is_Claimable_Again_After_First_Transaction_Rolls_Back`
+- [X] T032 [P] [US3] Integration test **(new case)** `Two_Processors_In_Parallel_Publish_Each_Row_Exactly_Once` in `tests/Ecommerce.Payments.Integration.Tests/DeadLetterClaimTests.cs`: two `DeadLetterRetryProcessor` instances (separate scopes/DbContexts) with a recording fake `IRawEventPublisher` that delays each publish ~100 ms, run `RunCycleAsync` concurrently over 10 due rows → every row published exactly once and all `Resolved`
 
 ### Implementation for User Story 3
 
-- [ ] T033 [US3] Fix anything T031/T032 reveal in `src/Ecommerce.Payments.Infrastructure/Persistence/PaymentDeadLetterRepository.cs` / `DeadLetterRetryProcessor.cs` (expected: none — SKIP LOCKED and per-row transactions come from T009/T022); document the multi-instance guarantee in both classes' XML docs
+- [X] T033 [US3] Fix anything T031/T032 reveal in `src/Ecommerce.Payments.Infrastructure/Persistence/PaymentDeadLetterRepository.cs` / `DeadLetterRetryProcessor.cs` (expected: none — SKIP LOCKED and per-row transactions come from T009/T022); document the multi-instance guarantee in both classes' XML docs
 
 **Checkpoint**: safe to scale out. Quality gate green.
 
