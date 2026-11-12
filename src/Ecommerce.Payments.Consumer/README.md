@@ -19,6 +19,7 @@ Contains no business logic — see `Ecommerce.Payments.Service` for orchestratio
 | Service | Defined in | Responsibility |
 |---|---|---|
 | `OrderPlacedConsumer` | this project | Consumes `orders.order-placed` and runs the payment write flow. |
+| `OrderCancelledConsumer` | this project | Consumes `orders.order-cancelled` and hands each cancellation to `RefundPaymentHandler` (US-04). |
 | `DeadLetterRetryWorker` | `Ecommerce.Payments.Infrastructure/DeadLetters` | Republishes `payment_dead_letters` rows with backoff ([docs/dead-letter-retry.md](../../docs/dead-letter-retry.md)). |
 
 ## Topics
@@ -26,12 +27,16 @@ Contains no business logic — see `Ecommerce.Payments.Service` for orchestratio
 | Direction | Topic | Event |
 |---|---|---|
 | Consumes | `orders.order-placed` | `OrderPlaced` |
+| Consumes | `orders.order-cancelled` | `OrderCancelled` |
+
+Both consumers derive from `KafkaConsumerBase`: commit only after successful handling, retry a failing message in place with capped exponential backoff (`Kafka:ConsumerRetryBaseDelayMs` / `Kafka:ConsumerRetryMaxDelayMs`), never commit past it, and yield before touching Kafka so startup never depends on the broker.
 
 ## Configuration
 
 See `appsettings.json` — `ConnectionStrings:Payments`, `Kafka:BootstrapServers`,
-`Kafka:ConsumerGroupId`, `Kafka:OrderPlacedTopic`, `Kafka:PaymentProcessedTopic`,
-`Kafka:PaymentFailedTopic`, `PaymentPolicy:MaxAmountThreshold`, and the `DeadLetterRetry`
+`Kafka:ConsumerGroupId`, `Kafka:OrderPlacedTopic`, `Kafka:OrderCancelledTopic`,
+`Kafka:PaymentProcessedTopic`, `Kafka:PaymentFailedTopic`, `Kafka:PaymentRefundedTopic`,
+`Kafka:ConsumerRetryBaseDelayMs`, `Kafka:ConsumerRetryMaxDelayMs`, `PaymentPolicy:MaxAmountThreshold`, and the `DeadLetterRetry`
 section (`IntervalMs`, `BatchSize`, `BaseDelayMs`, `MaxDelayMs`, `MaxRetries`).
 
 ## Running locally

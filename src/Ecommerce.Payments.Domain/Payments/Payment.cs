@@ -4,7 +4,9 @@ namespace Ecommerce.Payments.Domain.Payments;
 /// Aggregate root representing a single charge attempt tied to one order.
 /// The only way a <see cref="Payment"/> comes into existence is <see cref="CreatePending"/>,
 /// which returns a new instance in <see cref="PaymentStatus.Pending"/>. State is only ever
-/// mutated through aggregate methods (e.g. <see cref="Process"/>) — there are no public setters.
+/// mutated through aggregate methods (<see cref="Process"/>, <see cref="Fail"/>,
+/// <see cref="Refund"/>) — there are no public setters. Lifecycle: Pending → Processed | Failed;
+/// Processed → Refunded.
 /// </summary>
 public sealed class Payment
 {
@@ -17,7 +19,11 @@ public sealed class Payment
         PaymentStatus status,
         Guid sourceEventId,
         DateTimeOffset createdAt,
-        DateTimeOffset? processedAt)
+        DateTimeOffset? processedAt,
+        string? failureReason = null,
+        DateTimeOffset? failedAt = null,
+        DateTimeOffset? refundedAt = null,
+        Guid? refundSourceEventId = null)
     {
         Id = id;
         OrderId = orderId;
@@ -28,8 +34,10 @@ public sealed class Payment
         SourceEventId = sourceEventId;
         CreatedAt = createdAt;
         ProcessedAt = processedAt;
-        FailureReason = null;
-        FailedAt = null;
+        FailureReason = failureReason;
+        FailedAt = failedAt;
+        RefundedAt = refundedAt;
+        RefundSourceEventId = refundSourceEventId;
     }
 
     /// <summary>Payment aggregate id (<c>aggregateId</c> on outbound events).</summary>
@@ -67,6 +75,49 @@ public sealed class Payment
 
     /// <summary>When the transition to <see cref="PaymentStatus.Failed"/> completed. Null unless failed.</summary>
     public DateTimeOffset? FailedAt { get; private set; }
+
+    /// <summary>When the transition to <see cref="PaymentStatus.Refunded"/> completed. Null unless refunded.</summary>
+    public DateTimeOffset? RefundedAt { get; private set; }
+
+    /// <summary>
+    /// The <c>eventId</c> of the <c>OrderCancelled</c> message that caused the refund. Null unless
+    /// refunded. Kept for traceability and used to recognise redeliveries of that same message.
+    /// </summary>
+    public Guid? RefundSourceEventId { get; private set; }
+
+    /// <summary>
+    /// Restores a previously saved <see cref="Payment"/> exactly as stored. Persistence only — it
+    /// runs no business rules and must not be used to create new payments (use
+    /// <see cref="CreatePending"/>).
+    /// </summary>
+    public static Payment Rehydrate(
+        Guid id,
+        Guid orderId,
+        Guid customerId,
+        decimal amount,
+        string currency,
+        PaymentStatus status,
+        Guid sourceEventId,
+        DateTimeOffset createdAt,
+        DateTimeOffset? processedAt,
+        string? failureReason,
+        DateTimeOffset? failedAt,
+        DateTimeOffset? refundedAt,
+        Guid? refundSourceEventId) =>
+        new(
+            id,
+            orderId,
+            customerId,
+            amount,
+            currency,
+            status,
+            sourceEventId,
+            createdAt,
+            processedAt,
+            failureReason,
+            failedAt,
+            refundedAt,
+            refundSourceEventId);
 
     /// <summary>
     /// Creates a new <see cref="Payment"/> in <see cref="PaymentStatus.Pending"/> for the given
@@ -143,6 +194,48 @@ public sealed class Payment
 
         return new PaymentFailed(Id, OrderId, reason, FailedAt.Value);
     }
+
+    /// <summary>
+    /// Transitions this payment from <see cref="PaymentStatus.Processed"/> to
+    /// <see cref="PaymentStatus.Refunded"/> (full refund) and returns the resulting domain event.
+    /// </summary>
+    /// <param name="sourceEventId">The <c>eventId</c> of the <c>OrderCancelled</c> causing the refund.</param>
+    /// <param name="refundedAt">When the refund happens.</param>
+    /// <exception cref="InvalidPaymentTransitionException">
+    /// The payment is not currently <see cref="PaymentStatus.Processed"/>. State is left unchanged.
+    /// </exception>
+    public PaymentRefunded Refund(Guid sourceEventId, DateTimeOffset refundedAt)
+    {
+        if (Status != PaymentStatus.Processed)
+        {
+            throw new InvalidPaymentTransitionException(
+                $"Cannot refund payment {Id} because it is in status {Status}, not {PaymentStatus.Processed}.");
+        }
+
+        Status = PaymentStatus.Refunded;
+        RefundedAt = refundedAt;
+        RefundSourceEventId = sourceEventId;
+
+        return new PaymentRefunded(Id, OrderId, Amount, Currency, refundedAt);
+    }
+
+    /// <summary>
+    /// The sole place the refund rule is decided (Constitution Principle I / VI "Refund rules"):
+    /// a <see cref="PaymentStatus.Processed"/> payment is refunded via <see cref="Refund"/>; an
+    /// already <see cref="PaymentStatus.Refunded"/> payment is ignored as
+    /// <see cref="RefundIgnoredReason.AlreadyRefunded"/>; a <see cref="PaymentStatus.Failed"/> or
+    /// <see cref="PaymentStatus.Pending"/> payment is ignored as
+    /// <see cref="RefundIgnoredReason.NotCompleted"/>. Never throws, so callers never have to
+    /// inspect <see cref="Status"/> themselves.
+    /// </summary>
+    /// <param name="sourceEventId">The <c>eventId</c> of the <c>OrderCancelled</c> requesting the refund.</param>
+    /// <param name="refundedAt">When the refund happens, if it is applied.</param>
+    public RefundDecision RequestRefund(Guid sourceEventId, DateTimeOffset refundedAt) => Status switch
+    {
+        PaymentStatus.Processed => new RefundDecision.Refunded(Refund(sourceEventId, refundedAt)),
+        PaymentStatus.Refunded => new RefundDecision.Ignored(RefundIgnoredReason.AlreadyRefunded),
+        _ => new RefundDecision.Ignored(RefundIgnoredReason.NotCompleted)
+    };
 
     /// <summary>
     /// The sole place the amount-vs-threshold business rule is evaluated (Constitution

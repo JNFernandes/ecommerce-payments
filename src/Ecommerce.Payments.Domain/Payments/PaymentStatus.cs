@@ -2,6 +2,8 @@ namespace Ecommerce.Payments.Domain.Payments;
 
 /// <summary>
 /// The lifecycle state of a <see cref="Payment"/> aggregate.
+/// Transitions: <see cref="Pending"/> → <see cref="Processed"/> | <see cref="Failed"/>;
+/// <see cref="Processed"/> → <see cref="Refunded"/>.
 /// </summary>
 public enum PaymentStatus
 {
@@ -12,8 +14,14 @@ public enum PaymentStatus
     Processed,
 
     /// <summary>
-    /// The payment could not be processed. Reserved for a future story (payment failure
-    /// handling); no flow in this feature transitions a <see cref="Payment"/> into this state.
+    /// The payment could not be completed (e.g. the amount exceeded the configured threshold).
+    /// Terminal: a failed payment is never processed or refunded.
     /// </summary>
-    Failed
+    Failed,
+
+    /// <summary>
+    /// The full amount of a <see cref="Processed"/> payment was refunded because its order was
+    /// cancelled. Terminal.
+    /// </summary>
+    Refunded
 }

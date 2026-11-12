@@ -115,6 +115,12 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("ProcessedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("RefundSourceEventId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("RefundedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid>("SourceEventId")
                         .HasColumnType("uuid");
 

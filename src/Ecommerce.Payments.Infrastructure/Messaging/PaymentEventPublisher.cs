@@ -14,7 +14,8 @@ namespace Ecommerce.Payments.Infrastructure.Messaging;
 /// <summary>
 /// Confluent.Kafka implementation of <see cref="IPaymentEventPublisher"/> and
 /// <see cref="IRawEventPublisher"/>. Serializes <see cref="PaymentProcessed"/> /
-/// <see cref="PaymentFailed"/> domain events into their wire formats and publishes them through
+/// <see cref="PaymentFailed"/> / <see cref="PaymentRefunded"/> domain events into their wire
+/// formats and publishes them through
 /// <see cref="PublishRawAsync"/>. Invoked by <see cref="ProcessPaymentHandler"/> only after a
 /// successful save (Constitution Principle II).
 ///
@@ -98,6 +99,30 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
             paymentFailed.PaymentId,
             paymentFailed.OrderId,
             nameof(PaymentFailedEvent),
+            JsonSerializer.Serialize(integrationEvent),
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task PublishRefundedAsync(PaymentRefunded paymentRefunded, CancellationToken cancellationToken)
+    {
+        var integrationEvent = new PaymentRefundedEvent
+        {
+            EventId = Guid.NewGuid(),
+            OccurredAt = paymentRefunded.RefundedAt,
+            AggregateId = paymentRefunded.PaymentId,
+            Version = 1,
+            OrderId = paymentRefunded.OrderId,
+            Amount = paymentRefunded.Amount,
+            Currency = paymentRefunded.Currency,
+            RefundedAt = paymentRefunded.RefundedAt
+        };
+
+        await PublishOrDeadLetterAsync(
+            _kafkaOptions.PaymentRefundedTopic,
+            paymentRefunded.PaymentId,
+            paymentRefunded.OrderId,
+            nameof(PaymentRefundedEvent),
             JsonSerializer.Serialize(integrationEvent),
             cancellationToken);
     }

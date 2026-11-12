@@ -85,17 +85,24 @@ in the background.
 - The **`aggregateId` of the order event (the order id) is the idempotency key**: at most one
   `Payment` per order, and a redelivered `OrderPlaced` never creates a second payment or a second
   published event.
-- Consumers also deduplicate redelivered messages by `eventId`.
+- Consumers also deduplicate redelivered messages by `eventId`. For refunds: the cancelling
+  `eventId` is stored on the payment as `RefundSourceEventId`; a redelivery with that id is
+  ignored before Domain, and a re-published cancellation (new `eventId`) is ignored because the
+  payment is already `Refunded`. `SaveRefundAsync` is conditional (only if still Processed) so
+  concurrent deliveries cannot refund twice. (`OrderPlacedConsumer` still dedupes by order id —
+  pre-existing.)
+- New consumers derive from `KafkaConsumerBase` (commit after success, retry the same message
+  in place with backoff, never commit past a failure).
 
 ## Event contracts
 
 | Direction | Topic | Event | Notes |
 |---|---|---|---|
 | Consumes | `orders.order-placed` | `OrderPlaced` | `eventId`, `occurredAt`, `aggregateId` (= order id), `version`, `customerId`, `totalAmount`. No `orderId`/`currency` field (currency defaults to USD). |
-| Consumes | `orders.order-cancelled` | `OrderCancelled` | Planned (US-04). `aggregateId` = order id. Refunds a `Processed` payment. |
+| Consumes | `orders.order-cancelled` | `OrderCancelled` | `eventId`, `occurredAt`, `aggregateId` (= order id), `version`; optional `customerId`, `reason`. Refunds a `Processed` payment (US-04). |
 | Publishes | `payments.payment-processed` | `PaymentProcessed` | + `orderId`, `amount`, `currency`, `processedAt`. |
 | Publishes | `payments.payment-failed` | `PaymentFailed` | + `orderId`, `reason`, `failedAt`. |
-| Publishes | `payments.payment-refunded` | `PaymentRefunded` | Planned (US-04). |
+| Publishes | `payments.payment-refunded` | `PaymentRefunded` | + `orderId`, `amount`, `currency`, `refundedAt`; key = payment id. |
 
 - Every published payment event carries `eventId`, `occurredAt`, `aggregateId` = the **payment**
   id, `version`, and a separate `orderId` = the order id. Downstream consumers must use

@@ -2,8 +2,6 @@ using Ecommerce.Payments.Domain.Payments;
 using Ecommerce.Payments.Service.IntegrationEvents;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Polly;
-using Polly.Retry;
 
 namespace Ecommerce.Payments.Service.Payments;
 
@@ -19,16 +17,6 @@ namespace Ecommerce.Payments.Service.Payments;
 /// </summary>
 public sealed class ProcessPaymentHandler
 {
-    private static readonly ResiliencePipeline SavePipeline = new ResiliencePipelineBuilder()
-        .AddRetry(new RetryStrategyOptions
-        {
-            ShouldHandle = new PredicateBuilder().Handle<Exception>(),
-            MaxRetryAttempts = 3,
-            Delay = TimeSpan.FromMilliseconds(200),
-            BackoffType = DelayBackoffType.Exponential
-        })
-        .Build();
-
     private readonly IPaymentRepository _repository;
     private readonly IPaymentEventPublisher _publisher;
     private readonly decimal _maxAmountThreshold;
@@ -69,7 +57,7 @@ public sealed class ProcessPaymentHandler
         {
             // Both DB calls (the idempotency check and the save) are equally subject to
             // transient PostgreSQL failures, so both are retried — not just the save.
-            var alreadyExists = await SavePipeline.ExecuteAsync(
+            var alreadyExists = await PersistenceRetry.Pipeline.ExecuteAsync(
                 async ct => await _repository.ExistsByOrderIdAsync(orderId, ct),
                 cancellationToken);
             if (alreadyExists)
@@ -86,7 +74,7 @@ public sealed class ProcessPaymentHandler
 
             outcome = payment.Evaluate(_maxAmountThreshold);
 
-            await SavePipeline.ExecuteAsync(
+            await PersistenceRetry.Pipeline.ExecuteAsync(
                 async ct => await _repository.SaveAsync(payment, ct),
                 cancellationToken);
         }

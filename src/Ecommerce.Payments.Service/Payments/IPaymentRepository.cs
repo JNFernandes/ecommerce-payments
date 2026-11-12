@@ -17,4 +17,21 @@ public interface IPaymentRepository
     /// Domain (Constitution Principle II).
     /// </summary>
     public Task<bool> ExistsByOrderIdAsync(Guid orderId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Loads the <see cref="Payment"/> for <paramref name="orderId"/>, or returns
+    /// <see langword="null"/> when the order has no payment (a lookup result, not an error).
+    /// </summary>
+    public Task<Payment?> GetByOrderIdAsync(Guid orderId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Durably saves a refund already applied to <paramref name="payment"/> by the Domain
+    /// (<see cref="Payment.Refund"/>). The update is conditional on the stored payment still being
+    /// <see cref="PaymentStatus.Processed"/>, so two concurrent deliveries cannot both refund it.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when the refund was saved; <see langword="false"/> when the stored
+    /// payment was no longer Processed (refunded concurrently) and nothing was written.
+    /// </returns>
+    public Task<bool> SaveRefundAsync(Payment payment, CancellationToken cancellationToken);
 }
