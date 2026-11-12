@@ -34,6 +34,11 @@ public sealed class PaymentsDbContext : DbContext
             deadLetter.ToTable("payment_dead_letters");
             deadLetter.HasKey(d => d.Id);
             deadLetter.Property(d => d.Payload).HasColumnType("jsonb");
+            deadLetter.Property(d => d.Status).HasConversion<string>().HasMaxLength(20);
+            // Keeps the retry worker's claim query cheap as resolved rows accumulate.
+            deadLetter.HasIndex(d => d.NextRetryAt)
+                .HasDatabaseName("IX_payment_dead_letters_due")
+                .HasFilter("\"Status\" = 'PendingRetry'");
         });
     }
 }

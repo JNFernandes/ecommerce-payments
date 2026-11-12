@@ -2,6 +2,7 @@ using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
+using Ecommerce.Payments.Infrastructure.Persistence.Entities;
 using Ecommerce.Payments.Service.Payments;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,6 +57,14 @@ public class PublishFailureDeadLetterTests : IAsyncLifetime
         Assert.Equal(nameof(Ecommerce.Payments.Infrastructure.Messaging.IntegrationEvents.PaymentProcessedEvent), deadLetter.EventType);
         Assert.Contains(orderId.ToString(), deadLetter.Payload, StringComparison.Ordinal);
         Assert.False(string.IsNullOrWhiteSpace(deadLetter.FailureReason));
+
+        // US-03: new dead letters are created ready for the retry worker.
+        Assert.Equal(DeadLetterStatus.PendingRetry, deadLetter.Status);
+        Assert.Equal(0, deadLetter.RetryCount);
+        Assert.Equal("payments.payment-processed", deadLetter.Topic);
+        Assert.Equal(payment.Id.ToString(), deadLetter.MessageKey);
+        Assert.NotNull(deadLetter.NextRetryAt);
+        Assert.Null(deadLetter.ResolvedAt);
     }
 
     private ServiceProvider BuildServiceProvider()
@@ -79,6 +88,8 @@ public class PublishFailureDeadLetterTests : IAsyncLifetime
                 o.OrderPlacedTopic = "orders.order-placed";
                 o.PaymentProcessedTopic = "payments.payment-processed";
             });
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
         services.AddSingleton<IPaymentEventPublisher, PaymentEventPublisher>();
 
         return services.BuildServiceProvider();
