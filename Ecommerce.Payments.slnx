@@ -8,6 +8,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Ecommerce.Payments.Component.Tests/Ecommerce.Payments.Component.Tests.csproj" />
     <Project Path="tests/Ecommerce.Payments.Domain.Tests/Ecommerce.Payments.Domain.Tests.csproj" />
+    <Project Path="tests/Ecommerce.Payments.Infrastructure.Tests/Ecommerce.Payments.Infrastructure.Tests.csproj" />
     <Project Path="tests/Ecommerce.Payments.Integration.Tests/Ecommerce.Payments.Integration.Tests.csproj" />
     <Project Path="tests/Ecommerce.Payments.Service.Tests/Ecommerce.Payments.Service.Tests.csproj" />
   </Folder>

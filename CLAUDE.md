@@ -8,7 +8,9 @@ constitution wins. Architectural decisions live in `docs/adr/`.
 
 - .NET 10 / C# **Worker Service** — a pure Kafka consumer/producer, no HTTP API.
 - Kafka via `Confluent.Kafka`; EF Core + PostgreSQL (Npgsql).
-- Tests: xUnit, Moq, testcontainers-dotnet.
+- Tests: xUnit, Moq, `FakeTimeProvider`, testcontainers-dotnet. Unit tests: Domain.Tests,
+  Service.Tests, Infrastructure.Tests (dead-letter retry); Integration.Tests (PostgreSQL
+  container); Component.Tests (PostgreSQL + Kafka containers).
 - Local infrastructure comes from the sibling `ecommerce-infra` repo (docker compose):
   Kafka on `localhost:9092`, Postgres for payments on `localhost:5434`
   (database `payments`, user `payments_user`, password `payments_pass`).
@@ -58,9 +60,21 @@ Also: no `dynamic`/`object` for event data (enforced by `BannedSymbols.txt`), nu
    `payment_dead_letters`, and still commit the offset (the DB is the source of truth).
 5. Commit the offset.
 
-Publishing before a confirmed save is a critical violation. Dead-letter rows are retried by a
-background worker (exponential backoff, max retries, `FOR UPDATE SKIP LOCKED`, original
-`eventId` kept) — see `docs/adr/0003-dead-letter-retry.md` (US-03).
+Publishing before a confirmed save is a critical violation.
+
+**Dead-letter retry** (US-03): `DeadLetterRetryWorker` (`Ecommerce.Payments.Infrastructure/DeadLetters`,
+registered in the Consumer host) claims due `PendingRetry` rows one per transaction with
+`FOR UPDATE SKIP LOCKED`, republishes the stored payload unchanged (same topic, key, `eventId`)
+and marks rows `Resolved`, or reschedules them with exponential backoff until `Exhausted` after
+`MaxRetries`. Settings: `DeadLetterRetry` section. Details: `docs/dead-letter-retry.md`,
+`docs/adr/0003-dead-letter-retry.md`. Rules:
+- Retry paths publish through `IRawEventPublisher.PublishRawAsync` (throws, never
+  dead-letters) — never through `IPaymentEventPublisher`, which creates a new event id and a new
+  dead-letter row on failure.
+- All dead-letter persistence goes through `IPaymentDeadLetterRepository`.
+- All time decisions use the injected `TimeProvider` (tests use `FakeTimeProvider`). PostgreSQL
+  stores microseconds, so tests comparing stored timestamps should start fake clocks on whole
+  seconds.
 
 Startup must never depend on Kafka being reachable: connectivity problems are logged and retried
 in the background.

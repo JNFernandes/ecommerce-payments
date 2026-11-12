@@ -39,6 +39,19 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTimeOffset?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MessageKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("NextRetryAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Payload")
                         .IsRequired()
                         .HasColumnType("jsonb");
@@ -46,7 +59,26 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("PaymentId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Topic")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("NextRetryAt")
+                        .HasDatabaseName("IX_payment_dead_letters_due")
+                        .HasFilter("\"Status\" = 'PendingRetry'");
 
                     b.ToTable("payment_dead_letters", (string)null);
                 });
