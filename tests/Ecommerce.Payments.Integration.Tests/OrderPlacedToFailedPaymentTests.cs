@@ -60,6 +60,7 @@ public class OrderPlacedToFailedPaymentTests : IAsyncLifetime
         services.AddLogging();
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddOrderPersistence();
         services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
         services.AddScoped<ProcessPaymentHandler>();
         services

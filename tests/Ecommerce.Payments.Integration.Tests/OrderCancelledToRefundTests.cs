@@ -183,6 +183,7 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddOrderPersistence();
         services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();

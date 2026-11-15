@@ -1,5 +1,6 @@
 using Ecommerce.Payments.Domain.Payments;
 using Ecommerce.Payments.Service.IntegrationEvents;
+using Ecommerce.Payments.Service.Orders;
 using Ecommerce.Payments.Service.Payments;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,6 +14,8 @@ public class RefundPaymentHandlerTests
     private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 11, 12, 10, 5, 0, TimeSpan.Zero));
     private readonly Mock<IPaymentRepository> _repository = new();
     private readonly Mock<IPaymentEventPublisher> _publisher = new();
+    private readonly Mock<ICancellationMarkerRepository> _markers = new();
+    private readonly RecordingOrderUnitOfWork _unitOfWork = new();
 
     private static OrderCancelledEvent Cancellation(Guid orderId) => new()
     {
@@ -42,7 +45,13 @@ public class RefundPaymentHandlerTests
             .ReturnsAsync(payment);
 
     private RefundPaymentHandler CreateHandler(ILogger<RefundPaymentHandler>? logger = null) =>
-        new(_repository.Object, _publisher.Object, _clock, logger ?? NullLogger<RefundPaymentHandler>.Instance);
+        new(
+            _repository.Object,
+            _markers.Object,
+            _unitOfWork,
+            _publisher.Object,
+            _clock,
+            logger ?? NullLogger<RefundPaymentHandler>.Instance);
 
     [Fact]
     public async Task Should_Save_Refund_Before_Publishing_PaymentRefunded()
@@ -122,7 +131,14 @@ public class RefundPaymentHandlerTests
     public async Task Should_Not_Publish_And_Should_Throw_When_Save_Keeps_Failing()
     {
         var orderId = Guid.NewGuid();
-        Stored(StoredPayment(orderId, PaymentStatus.Processed));
+        var paymentId = Guid.NewGuid();
+        // Each attempt re-reads the payment (the whole transaction is retried), so return a fresh
+        // Processed copy every time, as the real repository does.
+        _repository
+            .Setup(r => r.GetByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => Payment.Rehydrate(
+                paymentId, orderId, Guid.NewGuid(), 129.99m, "USD", PaymentStatus.Processed, Guid.NewGuid(),
+                DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddMinutes(-30), null, null, null, null));
         _repository
             .Setup(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("database down"));

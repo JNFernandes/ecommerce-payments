@@ -220,6 +220,7 @@ public class RefundFlowTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddOrderPersistence();
         services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
         services.AddSingleton<PaymentEventPublisher>();
         services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());

@@ -174,6 +174,7 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         services.AddSingleton(timeProvider);
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddOrderPersistence();
         services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
         services.AddSingleton<PaymentEventPublisher>();
         services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());

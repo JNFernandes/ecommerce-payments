@@ -49,26 +49,26 @@ quickstart.md maps each scenario to a test.
 
 **⚠️ CRITICAL**: no user story work can begin until this phase is complete.
 
-- [ ] T001 [P] Write tests **(new)** in `tests/Ecommerce.Payments.Domain.Tests/Orders/CancellationMarkerTests.cs`:
+- [X] T001 [P] Write tests **(new)** in `tests/Ecommerce.Payments.Domain.Tests/Orders/CancellationMarkerTests.cs`:
   - `Record` keeps every value;
   - `Record` with an empty `orderId` throws `ArgumentException`;
   - `Record` with an empty `sourceEventId` throws `ArgumentException`;
   - a null `reason` is allowed;
   - `Rehydrate` restores every value without validation.
-- [ ] T002 Create `CancellationMarker` **(new)**, `public sealed class`, in `src/Ecommerce.Payments.Domain/Orders/CancellationMarker.cs`:
+- [X] T002 Create `CancellationMarker` **(new)**, `public sealed class`, in `src/Ecommerce.Payments.Domain/Orders/CancellationMarker.cs`:
   - get-only `OrderId`, `SourceEventId`, `CancelledAt`, `RecordedAt` and `Reason` (`string?`);
   - `static Record(Guid orderId, Guid sourceEventId, DateTimeOffset cancelledAt, DateTimeOffset recordedAt, string? reason)`, which validates that the ids are not empty;
   - `static Rehydrate(...)`, documented as "persistence only";
   - XML docs that cite Constitution VI "Cancellation markers".
 
   Makes T001 pass.
-- [ ] T003 Create the Service ports **(new)**, each with XML docs:
+- [X] T003 Create the Service ports **(new)**, each with XML docs:
   - `src/Ecommerce.Payments.Service/Orders/IOrderUnitOfWork.cs`: `Task<IOrderTransaction> BeginAsync(Guid orderId, CancellationToken)`. Doc: opens a transaction that holds a per-order lock until it is committed or disposed; a second caller for the same order waits.
   - `src/Ecommerce.Payments.Service/Orders/IOrderTransaction.cs`: `IAsyncDisposable` with `Task CommitAsync(CancellationToken)`. Doc: disposing without a commit rolls back.
   - `src/Ecommerce.Payments.Service/Orders/ICancellationMarkerRepository.cs`: `Task<CancellationMarker?> GetByOrderIdAsync(Guid, CancellationToken)` and `Task AddAsync(CancellationMarker, CancellationToken)`.
 
   Depends on T002. After T002 it can run in parallel with T004 and T007.
-- [ ] T004 [P] Create `CancellationMarkerEntity` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/Entities/CancellationMarkerEntity.cs`:
+- [X] T004 [P] Create `CancellationMarkerEntity` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/Entities/CancellationMarkerEntity.cs`:
   - properties `OrderId`, `SourceEventId`, `CancelledAt`, `RecordedAt`, `Reason` (`string?`);
   - an XML doc on every property.
 
@@ -76,19 +76,19 @@ quickstart.md maps each scenario to a test.
   - add `DbSet<CancellationMarkerEntity> CancellationMarkers`;
   - map it with `ToTable("order_cancellation_markers")` and `HasKey(m => m.OrderId)`;
   - update the class XML doc.
-- [ ] T005 Generate migration `AddOrderCancellationMarkers`:
+- [X] T005 Generate migration `AddOrderCancellationMarkers`:
   - run `dotnet ef migrations add AddOrderCancellationMarkers --project src/Ecommerce.Payments.Infrastructure --startup-project src/Ecommerce.Payments.Infrastructure --output-dir Persistence/Migrations`;
   - run `dotnet format` so it uses file-scoped namespaces like the existing migrations;
   - check that the migration only creates the table with PK `OrderId` and touches no existing table.
 
   Depends on T004.
-- [ ] T006 Implement `CancellationMarkerRepository` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/CancellationMarkerRepository.cs`:
+- [X] T006 Implement `CancellationMarkerRepository` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/CancellationMarkerRepository.cs`:
   - map explicitly between the entity and `CancellationMarker`;
   - `GetByOrderIdAsync` uses `AsNoTracking()` and then `CancellationMarker.Rehydrate`;
   - `AddAsync` adds the entity and calls `SaveChangesAsync`.
 
   Depends on T002, T003, T004.
-- [ ] T007 [P] Create `PersistenceOptions` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/PersistenceOptions.cs`:
+- [X] T007 [P] Create `PersistenceOptions` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/PersistenceOptions.cs`:
   - `SectionName = "Persistence"`;
   - `OrderLockTimeoutMs`, default 5000;
   - XML docs.
@@ -96,7 +96,7 @@ quickstart.md maps each scenario to a test.
   Create `OrderLockKey` **(new)**, `internal static`, in `src/Ecommerce.Payments.Infrastructure/Persistence/OrderLockKey.cs`:
   - `long For(Guid orderId)` XORs the two 64-bit halves of `orderId.ToByteArray()`;
   - XML doc that cites research R2.
-- [ ] T008 Implement `OrderUnitOfWork` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/OrderUnitOfWork.cs`: `public sealed class OrderUnitOfWork : IOrderUnitOfWork` over the scoped `PaymentsDbContext` and `IOptions<PersistenceOptions>`.
+- [X] T008 Implement `OrderUnitOfWork` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/OrderUnitOfWork.cs`: `public sealed class OrderUnitOfWork : IOrderUnitOfWork` over the scoped `PaymentsDbContext` and `IOptions<PersistenceOptions>`.
   - `BeginAsync` runs, in order:
     1. `Database.BeginTransactionAsync`;
     2. `ExecuteSqlRawAsync("SET LOCAL lock_timeout = '<n>ms'")`, with `n` taken from the options as an `int`, so there is nothing to inject;
@@ -107,7 +107,7 @@ quickstart.md maps each scenario to a test.
   - XML docs cite ADR 0004 and Constitution VI "Cancellation markers".
 
   Depends on T003, T007.
-- [ ] T009 Integration tests **(new)** in `tests/Ecommerce.Payments.Integration.Tests/OrderUnitOfWorkTests.cs`, on a PostgreSQL container with migrations applied:
+- [X] T009 Integration tests **(new)** in `tests/Ecommerce.Payments.Integration.Tests/OrderUnitOfWorkTests.cs`, on a PostgreSQL container with migrations applied:
   - `Second_Transaction_On_Same_Order_Waits_For_First_To_Commit`: tx1 begins for order X; tx2's `BeginAsync` for X has not completed after 300 ms; it completes after tx1 commits.
   - `Different_Orders_Do_Not_Wait`.
   - `Lock_Wait_Times_Out_With_Configured_Timeout`: `OrderLockTimeoutMs = 200`; tx2 throws a `PostgresException` with SqlState `55P03`.
@@ -122,7 +122,7 @@ quickstart.md maps each scenario to a test.
   - inserting a second marker for the same `OrderId` raises a unique violation (SqlState `23505`).
 
   Depends on T005, T006, T008.
-- [ ] T010 Wire DI in `src/Ecommerce.Payments.Consumer/Program.cs`:
+- [X] T010 Wire DI in `src/Ecommerce.Payments.Consumer/Program.cs`:
   - `AddOptions<PersistenceOptions>().Bind(section).Validate(o => o.OrderLockTimeoutMs > 0, ...).ValidateOnStart()`;
   - `AddScoped<IOrderUnitOfWork, OrderUnitOfWork>()`;
   - `AddScoped<ICancellationMarkerRepository, CancellationMarkerRepository>()`.
@@ -130,7 +130,7 @@ quickstart.md maps each scenario to a test.
   Add `"Persistence": { "OrderLockTimeoutMs": 5000 }` to `src/Ecommerce.Payments.Consumer/appsettings.json`.
 
   Depends on T006, T008.
-- [ ] T011 Refactor `src/Ecommerce.Payments.Service/Payments/ProcessPaymentHandler.cs` to take `IOrderUnitOfWork` and `ICancellationMarkerRepository`, keeping today's behaviour.
+- [X] T011 Refactor `src/Ecommerce.Payments.Service/Payments/ProcessPaymentHandler.cs` to take `IOrderUnitOfWork` and `ICancellationMarkerRepository`, keeping today's behaviour.
   - One `PersistenceRetry.Pipeline.ExecuteAsync` delegate per attempt does:
     1. `await using var tx = await _unitOfWork.BeginAsync(orderId, ct)`;
     2. `ExistsByOrderIdAsync`; true returns a "skip" result;
@@ -146,7 +146,7 @@ quickstart.md maps each scenario to a test.
     - The component tests `ProcessPaymentFlowTests.cs`, `ProcessPaymentFailureFlowTests.cs`, `DuplicateDeliveryTests.cs`, `DuplicateFailedDeliveryTests.cs`, `PublishFailureDeadLetterTests.cs` and `DeadLetterRetryFlowTests.cs`: the same three registrations.
 
   All existing assertions must stay green. Depends on T010.
-- [ ] T012 Refactor `src/Ecommerce.Payments.Service/Payments/RefundPaymentHandler.cs` the same way, keeping US-04 behaviour:
+- [X] T012 Refactor `src/Ecommerce.Payments.Service/Payments/RefundPaymentHandler.cs` the same way, keeping US-04 behaviour:
   - each attempt runs inside `BeginAsync(orderId)`;
   - the load, `eventId` dedupe, `RequestRefund` and `SaveRefundAsync` run inside the transaction;
   - `CommitAsync` runs after a successful `SaveRefundAsync`;

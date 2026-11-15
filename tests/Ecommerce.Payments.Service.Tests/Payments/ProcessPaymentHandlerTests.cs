@@ -1,6 +1,8 @@
 using Ecommerce.Payments.Domain.Payments;
 using Ecommerce.Payments.Service.IntegrationEvents;
+using Ecommerce.Payments.Service.Orders;
 using Ecommerce.Payments.Service.Payments;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -22,12 +24,44 @@ public class ProcessPaymentHandlerTests
     private static ProcessPaymentHandler CreateHandler(
         IPaymentRepository repository,
         IPaymentEventPublisher publisher,
-        decimal maxAmountThreshold = decimal.MaxValue) =>
+        decimal maxAmountThreshold = decimal.MaxValue,
+        ICancellationMarkerRepository? markers = null,
+        IOrderUnitOfWork? unitOfWork = null,
+        ILogger<ProcessPaymentHandler>? logger = null) =>
         new(
             repository,
+            markers ?? new Mock<ICancellationMarkerRepository>().Object,
+            unitOfWork ?? new RecordingOrderUnitOfWork(),
             publisher,
             Options.Create(new PaymentPolicyOptions { MaxAmountThreshold = maxAmountThreshold }),
-            NullLogger<ProcessPaymentHandler>.Instance);
+            logger ?? NullLogger<ProcessPaymentHandler>.Instance);
+
+    [Fact]
+    public async Task Should_Commit_Order_Transaction_Before_Publishing()
+    {
+        var repository = new Mock<IPaymentRepository>();
+        var publisher = new Mock<IPaymentEventPublisher>();
+        var calls = new List<string>();
+        var unitOfWork = new RecordingOrderUnitOfWork(calls);
+        var orderPlaced = ValidOrderPlaced();
+
+        repository
+            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        repository
+            .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
+            .Callback(() => calls.Add("Save"))
+            .Returns(Task.CompletedTask);
+        publisher
+            .Setup(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()))
+            .Callback(() => calls.Add("Publish"))
+            .Returns(Task.CompletedTask);
+
+        await CreateHandler(repository.Object, publisher.Object, unitOfWork: unitOfWork)
+            .HandleAsync(orderPlaced, CancellationToken.None);
+
+        Assert.Equal([$"Begin:{orderPlaced.AggregateId}", "Save", "Commit", "Dispose", "Publish"], calls);
+    }
 
     [Fact]
     public async Task HandleAsync_ValidOrderPlaced_CallsRepositoryThenPublisherInOrder()

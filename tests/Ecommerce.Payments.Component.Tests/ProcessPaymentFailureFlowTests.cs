@@ -78,6 +78,7 @@ public class ProcessPaymentFailureFlowTests : IAsyncLifetime
         services.AddLogging();
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddOrderPersistence();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
         services.AddSingleton<IPaymentEventPublisher, PaymentEventPublisher>();
