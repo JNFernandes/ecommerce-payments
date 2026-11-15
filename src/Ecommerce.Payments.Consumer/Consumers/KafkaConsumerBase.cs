@@ -1,5 +1,6 @@
 using Confluent.Kafka;
 using Ecommerce.Payments.Infrastructure.Messaging;
+using Ecommerce.Payments.Infrastructure.Persistence;
 using Microsoft.Extensions.Options;
 
 namespace Ecommerce.Payments.Consumer.Consumers;
@@ -11,12 +12,18 @@ namespace Ecommerce.Payments.Consumer.Consumers;
 /// <list type="bullet">
 /// <item>Startup never depends on Kafka: <see cref="ExecuteAsync"/> yields before subscribing.</item>
 /// <item>Offsets are committed manually and only after <see cref="HandleMessageAsync"/> returns
-/// <see langword="true"/>.</item>
+/// <see langword="true"/>, or after the message has been stored as a dead letter.</item>
 /// <item>At-least-once delivery: when handling throws, the consumer seeks back to the failed
 /// message and retries it after a capped exponential backoff
 /// (<see cref="KafkaOptions.ConsumerRetryBaseDelayMs"/> doubling up to
 /// <see cref="KafkaOptions.ConsumerRetryMaxDelayMs"/>). Later messages on that partition are
 /// not processed or committed before it, so nothing is skipped.</item>
+/// <item>Inbound dead-letter (US-06, ADR 0005): after
+/// <see cref="KafkaOptions.ConsumerMaxAttempts"/> failed attempts — or at once for an
+/// <see cref="InvalidMessageException"/> — the message is stored as received in
+/// <c>consumed_dead_letters</c> (<see cref="IConsumedDeadLetterStore"/>) and only then
+/// committed, so one bad message cannot stall its partition. If storing fails, nothing is
+/// committed and the message keeps being retried, handling it normally first each time.</item>
 /// <item>No exception from a single message ever crashes the host.</item>
 /// </list>
 /// </summary>
@@ -58,8 +65,9 @@ public abstract class KafkaConsumerBase : BackgroundService
 
     /// <summary>
     /// Validates and handles one raw message. Returns <see langword="true"/> when the offset
-    /// should be committed (message fully handled, or rejected as malformed). Throws when it
-    /// could not be handled; the base then retries the same message after a backoff.
+    /// should be committed (message fully handled). Throws <see cref="InvalidMessageException"/>
+    /// for a malformed envelope (stored as a dead letter, never retried), and any other
+    /// exception when it could not be handled (retried, then dead-lettered).
     /// Internal seam so integration/component tests can drive it without a broker.
     /// </summary>
     internal abstract Task<bool> HandleMessageAsync(string rawMessage, CancellationToken cancellationToken);
@@ -72,7 +80,12 @@ public abstract class KafkaConsumerBase : BackgroundService
         await Task.Yield();
 
         _consumer.Subscribe(Topic);
-        var consecutiveFailures = 0;
+
+        // The message currently failing and its failed attempts. Retry in place means
+        // consecutive failures are attempts on the same message; the position check guards
+        // against a rebalance handing us a different one.
+        TopicPartitionOffset? failingPosition = null;
+        var attempts = 0;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -92,6 +105,13 @@ public abstract class KafkaConsumerBase : BackgroundService
                 continue;
             }
 
+            if (failingPosition != consumeResult.TopicPartitionOffset)
+            {
+                failingPosition = consumeResult.TopicPartitionOffset;
+                attempts = 0;
+            }
+
+            TimeSpan? retryDelay;
             try
             {
                 if (await HandleMessageAsync(consumeResult.Message.Value ?? string.Empty, stoppingToken))
@@ -99,41 +119,147 @@ public abstract class KafkaConsumerBase : BackgroundService
                     _consumer.Commit(consumeResult);
                 }
 
-                consecutiveFailures = 0;
+                failingPosition = null;
+                attempts = 0;
+                continue;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
+            catch (InvalidMessageException ex)
+            {
+                // Can never succeed: store it once, without backoff or retries.
+                retryDelay = await DeadLetterAsync(consumeResult, ex, deadLetterAttempts: 1, stoppingToken);
+            }
             catch (Exception ex)
             {
-                consecutiveFailures++;
-                var delay = ComputeRetryDelay(consecutiveFailures);
-
-                Logger.LogError(
-                    ex,
-                    "Failed to handle message on {Topic} [{Partition}] @ {Offset} (attempt {Attempt}); " +
-                    "not committed, retrying the same message in {Delay}.",
-                    Topic,
-                    consumeResult.Partition.Value,
-                    consumeResult.Offset.Value,
-                    consecutiveFailures,
-                    delay);
-
-                // Re-read the failed message next instead of moving past it, so a later commit
-                // can never skip it (at-least-once, Constitution VI).
-                _consumer.Seek(consumeResult.TopicPartitionOffset);
-
-                try
+                attempts++;
+                if (attempts >= KafkaOptions.ConsumerMaxAttempts)
                 {
-                    await Task.Delay(delay, stoppingToken);
+                    retryDelay = await DeadLetterAsync(consumeResult, ex, attempts, stoppingToken);
                 }
-                catch (OperationCanceledException)
+                else
                 {
-                    break;
+                    retryDelay = ComputeRetryDelay(attempts);
+                    Logger.LogError(
+                        ex,
+                        "Failed to handle message on {Topic} [{Partition}] @ {Offset} (attempt {Attempt} of {MaxAttempts}); " +
+                        "not committed, retrying the same message in {Delay}.",
+                        Topic,
+                        consumeResult.Partition.Value,
+                        consumeResult.Offset.Value,
+                        attempts,
+                        KafkaOptions.ConsumerMaxAttempts,
+                        retryDelay);
                 }
             }
+
+            if (retryDelay is null)
+            {
+                // Stored and committed: move on to the next message.
+                failingPosition = null;
+                attempts = 0;
+                continue;
+            }
+
+            // Re-read the failed message next instead of moving past it, so a later commit
+            // can never skip it (at-least-once, Constitution VI).
+            _consumer.Seek(consumeResult.TopicPartitionOffset);
+
+            try
+            {
+                await Task.Delay(retryDelay.Value, stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
+    }
+
+    /// <summary>
+    /// Stores the message in <c>consumed_dead_letters</c>, then commits it. Returns
+    /// <see langword="null"/> on success, or the backoff to wait before retrying when the store
+    /// failed (the message is then not committed).
+    /// </summary>
+    private async Task<TimeSpan?> DeadLetterAsync(
+        ConsumeResult<string?, string?> consumeResult,
+        Exception failure,
+        int deadLetterAttempts,
+        CancellationToken stoppingToken)
+    {
+        var error = DescribeError(failure);
+        try
+        {
+            await using (var scope = ScopeFactory.CreateAsyncScope())
+            {
+                var store = scope.ServiceProvider.GetRequiredService<IConsumedDeadLetterStore>();
+                await store.StoreAsync(
+                    new ConsumedDeadLetter(
+                        consumeResult.Topic,
+                        consumeResult.Partition.Value,
+                        consumeResult.Offset.Value,
+                        consumeResult.Message.Key,
+                        consumeResult.Message.Value,
+                        error,
+                        deadLetterAttempts),
+                    stoppingToken);
+            }
+
+            _consumer.Commit(consumeResult);
+        }
+        catch (Exception storeException) when (storeException is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            var delay = ComputeRetryDelay(Math.Max(deadLetterAttempts, 1));
+            Logger.LogError(
+                storeException,
+                "Could not dead-letter message on {Topic} [{Partition}] @ {Offset} ({Error}); " +
+                "not committed, retrying the same message in {Delay}.",
+                Topic,
+                consumeResult.Partition.Value,
+                consumeResult.Offset.Value,
+                error,
+                delay);
+            return delay;
+        }
+
+        if (failure is InvalidMessageException invalid)
+        {
+            Logger.LogWarning(
+                "Malformed message on {Topic} [{Partition}] @ {Offset}: {Reason}; stored in consumed_dead_letters and committed.",
+                Topic,
+                consumeResult.Partition.Value,
+                consumeResult.Offset.Value,
+                invalid.Reason);
+        }
+        else
+        {
+            Logger.LogError(
+                failure,
+                "Dead-lettered message on {Topic} [{Partition}] @ {Offset} after {Attempts} attempts: {Error}; " +
+                "stored in consumed_dead_letters and committed.",
+                Topic,
+                consumeResult.Partition.Value,
+                consumeResult.Offset.Value,
+                deadLetterAttempts,
+                error);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// <c>"Type: message"</c> of <paramref name="exception"/>, plus its innermost exception when
+    /// different (e.g. the <c>PostgresException</c> inside a <c>DbUpdateException</c>).
+    /// </summary>
+    internal static string DescribeError(Exception exception)
+    {
+        var description = $"{exception.GetType().FullName}: {exception.Message}";
+        var innermost = exception.GetBaseException();
+        return ReferenceEquals(innermost, exception)
+            ? description
+            : $"{description} ---> {innermost.GetType().FullName}: {innermost.Message}";
     }
 
     /// <summary>

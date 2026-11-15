@@ -100,7 +100,7 @@ after both.
 
 ### Tests for User Story 1
 
-- [ ] T008 [US1] Component tests **(new)** in `tests/Ecommerce.Payments.Component.Tests/KafkaConsumerBaseDeadLetterTests.cs`, on a Kafka container.
+- [X] T008 [US1] Component tests **(new)** in `tests/Ecommerce.Payments.Component.Tests/KafkaConsumerBaseDeadLetterTests.cs`, on a Kafka container.
   - **Setup**:
     - Use a test subclass of `KafkaConsumerBase`, modelled on `FailFirstAttemptsConsumer` in `KafkaConsumerBaseRetryTests.cs`, that always throws for message "A" and records every call.
     - Use a `RecordingConsumedDeadLetterStore : IConsumedDeadLetterStore`, registered as a singleton in the test `ServiceCollection`. It can be told to throw for its first *k* calls, and it records successful calls.
@@ -122,7 +122,7 @@ after both.
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1] Implement the attempt tracking and dead-lettering in `src/Ecommerce.Payments.Consumer/Consumers/KafkaConsumerBase.cs`, following plan.md "Consume loop" and data-model.md "Consume-loop decisions".
+- [X] T009 [US1] Implement the attempt tracking and dead-lettering in `src/Ecommerce.Payments.Consumer/Consumers/KafkaConsumerBase.cs`, following plan.md "Consume loop" and data-model.md "Consume-loop decisions".
   1. Track the failing message's `TopicPartitionOffset` with its attempt count. Reset the count on a different position, on success and after a successful store.
   2. On a non-cancellation exception, increment the count. While it is below `ConsumerMaxAttempts`, keep the existing log, seek and backoff.
   3. Once the count reaches the maximum, call a private `StoreThenCommitAsync`. It creates a scope, resolves `IConsumedDeadLetterStore`, stores the message, then calls `Commit(consumeResult)`. It logs Error: "Dead-lettered message on {Topic} [{Partition}] @ {Offset} after {Attempts} attempts: {Error}; committed."
