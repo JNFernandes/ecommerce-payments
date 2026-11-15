@@ -292,11 +292,17 @@ delivery recovers, the processed message is consumed before the refunded one.
   - replace the v1.3.0 note and the "Dead-letter retry" block with the actual outbox flow and rules: handlers add entries through `IPaymentOutbox` inside the order transaction; nothing calls the Publisher except the relay; there is one outbound store; ordering is per payment;
   - update the event-contracts notes and the stack test list.
 - [X] T023 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all tasks `[X]`.
-- [ ] T024 Do the manual check from `specs/007-transactional-outbox/quickstart.md` against `ecommerce-infra`.
+- [X] T024 Do the manual check from `specs/007-transactional-outbox/quickstart.md` against `ecommerce-infra`.
   - Use isolated `us07-manual.*` topics and the group `us07-manual-check`.
   - Apply the migration, then cover the healthy path, the restart, and a broker outage.
   - Clean up the topics, the group and the test rows afterwards.
   - Do it **only** if no other local Payments Consumer is running; otherwise record why it was skipped.
+  - **Done 2026-11-15.** No other Payments Consumer was running.
+    - **Migration:** `TurnDeadLettersIntoOutbox` was applied to the local `payments` database. Its two existing `Resolved` dead letters became `Published` outbox entries, with nothing lost.
+    - **Healthy path:** an `OrderPlaced` gave one `PaymentProcessedEvent` entry, `Published` 240 ms after `RecordedAt`, and one message on the isolated processed topic.
+    - **Restart:** with the Consumer stopped, an `OrderPlaced` was produced and nothing happened. After the Consumer restarted, the payment was processed and exactly one more message was published (topic offset 1 → 2), with one outbox entry.
+    - **Broker outage: not run manually.** Stopping the shared `ecommerce-infra` Kafka would affect Orders, Inventory and Notifications. It is covered by `OutboxCrashRecoveryTests.Broker_Outage_…`, `OutboxPublishFailureTests` and `OutboxOrderingTests` against containers.
+    - **Cleanup:** the Consumer was stopped; the topics, the group, and the two test payments with their outbox entries were deleted.
 
 ---
 
