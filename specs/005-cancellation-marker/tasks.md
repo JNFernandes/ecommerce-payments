@@ -323,7 +323,15 @@ states:
   - the new setting;
   - ADR 0004.
 - [X] T026 Run the full quality gate (`dotnet build`, `dotnet format --verify-no-changes`, `dotnet test`) and `docker build -t ecommerce-payments .`. Mark all tasks `[X]`.
-- [ ] T027 Manual check from `specs/005-cancellation-marker/quickstart.md` ("Manual check") against `ecommerce-infra`. Do it **only** if no other local Payments Consumer is running; otherwise skip it and record the reason here.
+- [X] T027 Manual check from `specs/005-cancellation-marker/quickstart.md` ("Manual check") against `ecommerce-infra`. Do it **only** if no other local Payments Consumer is running; otherwise skip it and record the reason here.
+  - **Done 2026-11-15.** No other Payments Consumer was running.
+  - Migration `AddOrderCancellationMarkers` was applied to the local `payments` database.
+  - So that Orders, Inventory and Notifications were not affected, the Consumer ran against isolated topics (`us05-manual.*`, created by hand because the broker does not auto-create topics) with consumer group `us05-manual-check`.
+  - Steps 3 to 5 behaved as expected:
+    - a marker row and the "Recorded cancellation" log;
+    - "Not charging order …", no `payments` row, offset 0 on the processed, failed and refunded topics;
+    - the redelivery logged as "duplicate delivery", still one marker.
+  - Cleanup: the Consumer was stopped, and the topics, the group and the test marker row were deleted.
 
 ---
 
