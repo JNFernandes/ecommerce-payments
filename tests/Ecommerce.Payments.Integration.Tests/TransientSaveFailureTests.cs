@@ -1,5 +1,6 @@
 using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Service.Payments;
@@ -64,8 +65,8 @@ public class TransientSaveFailureTests : IAsyncLifetime
             var count = await dbContext.Payments.CountAsync(p => p.OrderId == orderId);
             Assert.Equal(1, count);
 
-            var publisher = (FakePaymentEventPublisher)provider.GetRequiredService<IPaymentEventPublisher>();
-            Assert.Single(publisher.Published, p => p.OrderId == orderId);
+            var outbox = provider.GetRequiredService<OutboxReader>();
+            Assert.Single(outbox.Processed, p => p.OrderId == orderId);
         }
         finally
         {
@@ -80,7 +81,8 @@ public class TransientSaveFailureTests : IAsyncLifetime
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(connectionString));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
+        services.AddPaymentOutbox();
+        services.AddSingleton<OutboxReader>();
         services.AddScoped<ProcessPaymentHandler>();
         services
             .AddOptions<KafkaOptions>()

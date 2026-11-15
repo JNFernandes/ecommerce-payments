@@ -130,13 +130,13 @@ The event is published once, with the recorded `eventId`.
 
 ### Tests for User Story 1
 
-- [ ] T005 [P] [US1] Update the Service unit tests:
+- [X] T005 [P] [US1] Update the Service unit tests:
   - In `tests/Ecommerce.Payments.Service.Tests/Payments/ProcessPaymentHandlerTests.cs`, replace `Mock<IPaymentEventPublisher>` with `Mock<IPaymentOutbox>`. Use the shared `calls` list with `RecordingOrderUnitOfWork` to assert this order: `Begin`, `Save`, `Outbox:Processed`, `Commit`, `Dispose`. Also assert:
     - `AddFailedAsync` is called for an amount over the threshold;
     - no outbox call happens when the payment already exists or the order has a marker;
     - nothing is added when the save keeps failing.
   - In `tests/Ecommerce.Payments.Service.Tests/Payments/RefundPaymentHandlerTests.cs`, apply the same change. Assert that `AddRefundedAsync` runs after `SaveRefundAsync` returns true and before `Commit`, and that it is not called when `SaveRefundAsync` returns false or for any ignore case.
-- [ ] T006 [P] [US1] Write integration test helpers and tests **(new)**:
+- [X] T006 [P] [US1] Write integration test helpers and tests **(new)**:
   - `tests/Ecommerce.Payments.Integration.Tests/OutboxReader.cs` reads `payment_outbox` rows and deserialises the payloads. It exposes:
     - `Task<IReadOnlyList<PaymentProcessedEvent>> ProcessedAsync()`;
     - `FailedAsync()` and `RefundedAsync()`, built the same way;
@@ -146,12 +146,12 @@ The event is published once, with the recorded `eventId`.
     - `Failed_Commit_Leaves_Neither_Payment_Nor_Entry`. Use a decorating `IOrderTransaction` whose `CommitAsync` throws on its first call, with a single attempt and no retry. Assert there is no payment row and no outbox row;
     - `Refund_And_Its_Entry_Commit_Together`;
     - `Ignored_Cancellation_Adds_No_Entry`.
-- [ ] T007 [US1] Replace `FakePaymentEventPublisher` in the integration tests that assert published events: `CancellationBeforePaymentTests.cs`, `OrderCancelledToRefundTests.cs`, `PlaceCancelRaceTests.cs`, `OrderPlacedToPaymentTests.cs`, `OrderPlacedToFailedPaymentTests.cs` and `TransientSaveFailureTests.cs`.
+- [X] T007 [US1] Replace `FakePaymentEventPublisher` in the integration tests that assert published events: `CancellationBeforePaymentTests.cs`, `OrderCancelledToRefundTests.cs`, `PlaceCancelRaceTests.cs`, `OrderPlacedToPaymentTests.cs`, `OrderPlacedToFailedPaymentTests.cs` and `TransientSaveFailureTests.cs`.
   - Register the real outbox with `services.AddPaymentOutbox()`, from T009.
   - Assert through `OutboxReader`. For example, `Publisher.PublishedRefunds` becomes `await outbox.RefundedAsync()`, and `refund.PaymentId` becomes `refund.AggregateId`.
   - Delete `tests/Ecommerce.Payments.Integration.Tests/FakePaymentEventPublisher.cs`.
   - Depends on T006 and T009.
-- [ ] T008 [P] [US1] Component test **(new)** `tests/Ecommerce.Payments.Component.Tests/OutboxCrashRecoveryTests.cs`, with Kafka and PostgreSQL:
+- [X] T008 [P] [US1] Component test **(new)** `tests/Ecommerce.Payments.Component.Tests/OutboxCrashRecoveryTests.cs`, with Kafka and PostgreSQL:
   - `Outcome_Saved_While_Relay_Is_Down_Is_Published_Once_After_Restart`:
     1. Host only the consumers and produce an `OrderPlaced`.
     2. Wait for a `Pending` outbox row, and check nothing is on `payments.payment-processed`.
@@ -161,7 +161,7 @@ The event is published once, with the recorded `eventId`.
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1] Create the outbox port and its implementation.
+- [X] T009 [US1] Create the outbox port and its implementation.
   - **Port (new)**: `IPaymentOutbox` in `src/Ecommerce.Payments.Service/Payments/IPaymentOutbox.cs`.
     - Methods: `AddProcessedAsync(PaymentProcessed, CancellationToken)`, `AddFailedAsync(PaymentFailed, CancellationToken)` and `AddRefundedAsync(PaymentRefunded, CancellationToken)`.
     - XML doc: call inside the order transaction after the state change is saved and before commit; durable only when that transaction commits; never publishes.
@@ -170,7 +170,7 @@ The event is published once, with the recorded `eventId`.
     - Add an `OutboxEntryEntity` with `Id` new, `EventId` from the event, `PaymentId`, `EventType` (`nameof(PaymentProcessedEvent)` etc.), the matching `Topic`, `MessageKey` = payment id, `Payload`, `Status = Pending`, `RetryCount = 0`, and `RecordedAt = NextAttemptAt = now`.
     - Call `SaveChangesAsync`.
   - **Registration (new)**: `services.AddPaymentOutbox()` in `src/Ecommerce.Payments.Infrastructure/Outbox/OutboxServiceCollectionExtensions.cs`, registering `IPaymentOutbox` as scoped.
-- [ ] T010 [US1] Change the handlers.
+- [X] T010 [US1] Change the handlers.
   - In `src/Ecommerce.Payments.Service/Payments/ProcessPaymentHandler.cs`:
     - inject `IPaymentOutbox` instead of `IPaymentEventPublisher`;
     - inside `CreatePaymentAsync`, after `SaveAsync`, call `AddProcessedAsync` or `AddFailedAsync` according to the domain event type, then `CommitAsync`;
@@ -181,13 +181,13 @@ The event is published once, with the recorded `eventId`.
     - remove `PublishRefundedAsync`.
   - Delete `src/Ecommerce.Payments.Service/Payments/IPaymentEventPublisher.cs`.
   - Makes T005 and T006 pass. Depends on T009.
-- [ ] T011 [US1] Reduce `src/Ecommerce.Payments.Infrastructure/Messaging/PaymentEventPublisher.cs` to `IRawEventPublisher` only.
+- [X] T011 [US1] Reduce `src/Ecommerce.Payments.Infrastructure/Messaging/PaymentEventPublisher.cs` to `IRawEventPublisher` only.
   - Remove `PublishAsync`, `PublishFailedAsync`, `PublishRefundedAsync`, `PublishOrDeadLetterAsync` and `WriteDeadLetterAsync`, along with their scope-factory and time-provider dependencies.
   - Keep the producer with `MessageTimeoutMs = 10_000` and the idempotent `Dispose`.
   - Remove `AddAsync` from `IPaymentOutboxRepository` and `PaymentOutboxRepository`.
   - In `src/Ecommerce.Payments.Consumer/Program.cs`: register `AddPaymentOutbox()`, remove the `IPaymentEventPublisher` registrations, and keep the `PaymentEventPublisher` singleton forwarded to `IRawEventPublisher`.
   - Depends on T010.
-- [ ] T012 [US1] Update the component tests that used the direct publish path:
+- [X] T012 [US1] Update the component tests that used the direct publish path:
   - Add `services.AddPaymentOutbox()`, `services.AddScoped<IOutboxRelayProcessor, OutboxRelayProcessor>()`, the `OutboxRelayOptions` (`PollIntervalMs` 100 in tests) and `services.AddSingleton<IHostedService, OutboxRelayWorker>()` to:
     - `ProcessPaymentFlowTests.cs`, `ProcessPaymentFailureFlowTests.cs`, `DuplicateDeliveryTests.cs`, `DuplicateFailedDeliveryTests.cs`, `RefundFlowTests.cs`, `CancelBeforePlaceFlowTests.cs` and `MalformedMessageDeadLetterFlowTests.cs`.
   - Remove their `IPaymentEventPublisher` registrations.

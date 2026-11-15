@@ -9,11 +9,6 @@ namespace Ecommerce.Payments.Infrastructure.Persistence;
 /// </summary>
 public interface IPaymentOutboxRepository
 {
-    /// <summary>Inserts a new entry and saves it immediately.</summary>
-    /// <param name="entry">The entry to insert, with its bookkeeping initialised.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    public Task AddAsync(OutboxEntryEntity entry, CancellationToken cancellationToken);
-
     /// <summary>
     /// Starts a database transaction on the repository's context. Claimed rows stay locked
     /// until the returned transaction is committed or rolled back.

@@ -1,6 +1,7 @@
 using System.Globalization;
 using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Infrastructure.Persistence.Entities;
@@ -16,7 +17,7 @@ namespace Ecommerce.Payments.Integration.Tests;
 /// <summary>
 /// Consumer → Repository for <c>OrderCancelled</c> (US-04) against a real PostgreSQL container:
 /// the consumed message results in the correct persisted <c>Payment</c> state. Publishing is
-/// recorded by <see cref="FakePaymentEventPublisher"/>.
+/// recorded by <see cref="OutboxReader"/>.
 /// </summary>
 public class OrderCancelledToRefundTests : IAsyncLifetime
 {
@@ -44,8 +45,8 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         await _postgres.DisposeAsync();
     }
 
-    private FakePaymentEventPublisher Publisher =>
-        (FakePaymentEventPublisher)_provider.GetRequiredService<IPaymentEventPublisher>();
+    private OutboxReader Outbox =>
+        _provider.GetRequiredService<OutboxReader>();
 
     [Fact]
     public async Task HandleMessageAsync_ProcessedPayment_BecomesRefunded()
@@ -62,8 +63,8 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         Assert.Equal(PaymentStatus.Refunded, row.Status);
         Assert.NotNull(row.RefundedAt);
         Assert.Equal(cancellationEventId, row.RefundSourceEventId);
-        var refund = Assert.Single(Publisher.PublishedRefunds);
-        Assert.Equal(row.Id, refund.PaymentId);
+        var refund = Assert.Single(Outbox.Refunded);
+        Assert.Equal(row.Id, refund.AggregateId);
         Assert.Equal(orderId, refund.OrderId);
         Assert.Equal(ProcessedAmount, refund.Amount);
     }
@@ -78,7 +79,7 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         Assert.True(committed);
         await using var dbContext = CreateDbContext();
         Assert.Equal(0, await dbContext.Payments.CountAsync());
-        Assert.Empty(Publisher.PublishedRefunds);
+        Assert.Empty(Outbox.Refunded);
     }
 
     [Fact]
@@ -95,7 +96,7 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         Assert.Equal(PaymentStatus.Failed, row.Status);
         Assert.Null(row.RefundedAt);
         Assert.Null(row.RefundSourceEventId);
-        Assert.Empty(Publisher.PublishedRefunds);
+        Assert.Empty(Outbox.Refunded);
     }
 
     [Fact]
@@ -116,7 +117,7 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         Assert.Equal(PaymentStatus.Refunded, row.Status);
         Assert.Equal(firstEventId, row.RefundSourceEventId);
         Assert.Equal(afterFirst.RefundedAt, row.RefundedAt);
-        Assert.Single(Publisher.PublishedRefunds);
+        Assert.Single(Outbox.Refunded);
     }
 
     [Theory]
@@ -129,7 +130,7 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         // KafkaConsumerBase stores it in consumed_dead_letters and commits (US-06).
         await Assert.ThrowsAsync<InvalidMessageException>(
             () => consumer.HandleMessageAsync(rawMessage, CancellationToken.None));
-        Assert.Empty(Publisher.PublishedRefunds);
+        Assert.Empty(Outbox.Refunded);
     }
 
     [Fact]
@@ -186,7 +187,8 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
+        services.AddPaymentOutbox();
+        services.AddSingleton<OutboxReader>();
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();
         services.AddOptions<PaymentPolicyOptions>().Configure(o => o.MaxAmountThreshold = MaxAmountThreshold);

@@ -26,7 +26,7 @@ builder.Services
     .Bind(builder.Configuration.GetSection(OutboxRelayOptions.SectionName))
     .Validate(
         options => options.IsValid(),
-        "DeadLetterRetry settings must be positive and MaxDelayMs must be >= BaseDelayMs.")
+        "OutboxRelay settings must be positive and MaxDelayMs must be >= BaseDelayMs.")
     .ValidateOnStart();
 
 builder.Services
@@ -46,11 +46,11 @@ builder.Services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
 builder.Services.AddOrderPersistence();
 // Inbound messages that cannot be handled (US-06, ADR 0005).
 builder.Services.AddConsumedDeadLetterStore();
-// Singleton: the Kafka producer it wraps is designed to be long-lived and reused, not
-// recreated per message. One instance serves both the normal (dead-lettering) publish path and
-// the raw publish used by the dead-letter retry worker.
+// Transactional outbox (US-07, ADR 0006): handlers record events with the state change; only
+// the relay publishes, through the raw publisher. Singleton: the Kafka producer it wraps is
+// long-lived and reused.
+builder.Services.AddPaymentOutbox();
 builder.Services.AddSingleton<PaymentEventPublisher>();
-builder.Services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
 builder.Services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
 builder.Services.AddScoped<ProcessPaymentHandler>();
 builder.Services.AddScoped<RefundPaymentHandler>();

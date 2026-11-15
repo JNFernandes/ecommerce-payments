@@ -194,7 +194,6 @@ public class MalformedMessageDeadLetterFlowTests : IAsyncLifetime
         services.AddConsumedDeadLetterStore();
         services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<PaymentEventPublisher>();
-        services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();
@@ -211,6 +210,7 @@ public class MalformedMessageDeadLetterFlowTests : IAsyncLifetime
                 o.PaymentFailedTopic = "payments.payment-failed";
                 o.PaymentRefundedTopic = "payments.payment-refunded";
             });
+        services.AddOutboxRelay();
         services.AddSingleton<IHostedService, OrderPlacedConsumer>();
         services.AddSingleton<IHostedService, OrderCancelledConsumer>();
 

@@ -116,19 +116,6 @@ public class OutboxRelayProcessorTests
     }
 
     [Fact]
-    public async Task Should_Never_Add_A_New_DeadLetter_On_Retry_Failure()
-    {
-        ClaimSequence(OutboxRows.Pending(_clock.GetUtcNow()));
-        PublishFails(new InvalidOperationException("broker down"));
-
-        await CreateProcessor().RunCycleAsync(CancellationToken.None);
-
-        _repository.Verify(
-            r => r.AddAsync(It.IsAny<OutboxEntryEntity>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Fact]
     public async Task Should_Log_Error_With_Full_Context_When_Exhausted()
     {
         var row = OutboxRows.Pending(_clock.GetUtcNow(), retryCount: _options.MaxRetries - 1);

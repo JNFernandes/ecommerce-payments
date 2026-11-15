@@ -231,7 +231,8 @@ public class OutboxClaimTests : IAsyncLifetime
         };
 
         await using var dbContext = CreateDbContext();
-        await new PaymentOutboxRepository(dbContext).AddAsync(row, CancellationToken.None);
+        dbContext.PaymentOutbox.Add(row);
+        await dbContext.SaveChangesAsync();
         return row;
     }
 

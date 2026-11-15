@@ -166,7 +166,6 @@ public class CancelBeforePlaceFlowTests : IAsyncLifetime
         services.AddOrderPersistence();
         services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<PaymentEventPublisher>();
-        services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();
@@ -183,6 +182,7 @@ public class CancelBeforePlaceFlowTests : IAsyncLifetime
                 o.PaymentFailedTopic = PaymentFailedTopic;
                 o.PaymentRefundedTopic = PaymentRefundedTopic;
             });
+        services.AddOutboxRelay();
         services.AddSingleton<IHostedService, OrderPlacedConsumer>();
         services.AddSingleton<IHostedService, OrderCancelledConsumer>();
 

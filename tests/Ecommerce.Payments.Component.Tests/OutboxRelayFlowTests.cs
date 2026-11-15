@@ -20,7 +20,7 @@ namespace Ecommerce.Payments.Component.Tests;
 /// the event is dead-lettered, and the retry processor later republishes it to a real Kafka
 /// broker with the same payload, key and <c>eventId</c>.
 /// </summary>
-public class DeadLetterRetryFlowTests : IAsyncLifetime
+public class OutboxRelayFlowTests : IAsyncLifetime
 {
     private const string PaymentProcessedTopic = "payments.payment-processed";
     private const string UnreachableBroker = "127.0.0.1:1";
@@ -177,7 +177,7 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         services.AddOrderPersistence();
         services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<PaymentEventPublisher>();
-        services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
+        services.AddPaymentOutbox();
         services.AddSingleton(rawPublisher ?? (sp => sp.GetRequiredService<PaymentEventPublisher>()));
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<IOutboxRelayProcessor, OutboxRelayProcessor>();

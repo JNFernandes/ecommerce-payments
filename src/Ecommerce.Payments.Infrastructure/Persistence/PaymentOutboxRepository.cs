@@ -21,13 +21,6 @@ public sealed class PaymentOutboxRepository : IPaymentOutboxRepository
     }
 
     /// <inheritdoc />
-    public async Task AddAsync(OutboxEntryEntity entry, CancellationToken cancellationToken)
-    {
-        _dbContext.PaymentOutbox.Add(entry);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-    }
-
-    /// <inheritdoc />
     public Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken) =>
         _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
