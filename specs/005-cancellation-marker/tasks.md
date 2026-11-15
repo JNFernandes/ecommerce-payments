@@ -266,7 +266,7 @@ states:
 
 ### Tests for User Story 3
 
-- [ ] T020 [US3] Integration tests **(new)** in `tests/Ecommerce.Payments.Integration.Tests/PlaceCancelRaceTests.cs`, on a PostgreSQL container. Each handler runs in its own DI scope and `DbContext`, released together by a `Barrier` or a shared `TaskCompletionSource`.
+- [X] T020 [US3] Integration tests **(new)** in `tests/Ecommerce.Payments.Integration.Tests/PlaceCancelRaceTests.cs`, on a PostgreSQL container. Each handler runs in its own DI scope and `DbContext`, released together by a `Barrier` or a shared `TaskCompletionSource`.
   - `Concurrent_Place_And_Cancel_Always_End_In_Allowed_Outcome`: 50 rounds, new order ids, amounts alternating below and above the threshold. Per order, assert:
     - never both a marker and a payment;
     - never a `Processed` payment;
@@ -288,7 +288,7 @@ states:
 
 ### Implementation for User Story 3
 
-- [ ] T021 [US3] Fix whatever T020 exposes; no code change is expected. Confirm the following and keep them:
+- [X] T021 [US3] Fix whatever T020 exposes; no code change is expected. Confirm the following and keep them:
   - the Information log for losing the race comes from the existing branches (FR-007: US-04's "refunded concurrently" or US1's markers);
   - no Error-level log appears for a lost race in `PlaceCancelRaceTests`; assert this through a capturing logger provider.
 
