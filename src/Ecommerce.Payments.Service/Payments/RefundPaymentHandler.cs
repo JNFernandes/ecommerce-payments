@@ -1,3 +1,4 @@
+using Ecommerce.Payments.Domain.Orders;
 using Ecommerce.Payments.Domain.Payments;
 using Ecommerce.Payments.Service.IntegrationEvents;
 using Ecommerce.Payments.Service.Orders;
@@ -15,7 +16,9 @@ namespace Ecommerce.Payments.Service.Payments;
 /// (Constitution Principle II). The refund rule lives in Domain; this class only switches on
 /// the <see cref="RefundDecision"/> type. Cancellations that need no refund are normal outcomes:
 /// they return without error so the Consumer commits the offset (Constitution VI
-/// "Refund rules").
+/// "Refund rules"). When the order has no payment yet, a <see cref="CancellationMarker"/> is
+/// recorded instead (US-05, Constitution VI "Cancellation markers"); the per-order transaction
+/// makes that mutually exclusive with payment creation (ADR 0004).
 /// </summary>
 public sealed class RefundPaymentHandler
 {
@@ -86,7 +89,7 @@ public sealed class RefundPaymentHandler
         var payment = await _repository.GetByOrderIdAsync(orderId, cancellationToken);
         if (payment is null)
         {
-            return new Outcome.NoPayment();
+            return await RecordMarkerAsync(orderCancelled, transaction, cancellationToken);
         }
 
         // eventId dedupe before any Domain call (Constitution II): this exact message already
@@ -113,16 +116,59 @@ public sealed class RefundPaymentHandler
         return new Outcome.Refunded(refundedDecision.Event);
     }
 
+    /// <summary>
+    /// No payment exists yet: the cancellation may have overtaken its <c>OrderPlaced</c>. Records
+    /// a <see cref="CancellationMarker"/> so that a later <c>OrderPlaced</c> is not charged
+    /// (Constitution VI "Cancellation markers"), unless the order already has one.
+    /// </summary>
+    private async Task<Outcome> RecordMarkerAsync(
+        OrderCancelledEvent orderCancelled,
+        IOrderTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var existing = await _markers.GetByOrderIdAsync(orderCancelled.AggregateId, cancellationToken);
+        if (existing is not null)
+        {
+            return existing.SourceEventId == orderCancelled.EventId
+                ? new Outcome.DuplicateMarker()
+                : new Outcome.AlreadyMarked(existing.SourceEventId);
+        }
+
+        var marker = CancellationMarker.Record(
+            orderCancelled.AggregateId,
+            orderCancelled.EventId,
+            orderCancelled.OccurredAt,
+            _timeProvider.GetUtcNow(),
+            orderCancelled.Reason);
+        await _markers.AddAsync(marker, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new Outcome.MarkerRecorded();
+    }
+
     private void Log(OrderCancelledEvent orderCancelled, Outcome outcome)
     {
         switch (outcome)
         {
-            case Outcome.NoPayment:
+            case Outcome.MarkerRecorded:
                 _logger.LogInformation(
-                    "Ignoring OrderCancelled {EventId} for order {OrderId}: no payment exists for the order (reason: {Reason}).",
+                    "Recorded cancellation of order {OrderId} from OrderCancelled {EventId} before any payment exists; " +
+                    "a later OrderPlaced will not be charged (reason: {Reason}).",
+                    orderCancelled.AggregateId,
+                    orderCancelled.EventId,
+                    orderCancelled.Reason);
+                break;
+            case Outcome.DuplicateMarker:
+                _logger.LogInformation(
+                    "Ignoring OrderCancelled {EventId} for order {OrderId}: duplicate delivery; cancellation already recorded.",
+                    orderCancelled.EventId,
+                    orderCancelled.AggregateId);
+                break;
+            case Outcome.AlreadyMarked marked:
+                _logger.LogInformation(
+                    "Ignoring OrderCancelled {EventId} for order {OrderId}: order already recorded as cancelled by {SourceEventId}.",
                     orderCancelled.EventId,
                     orderCancelled.AggregateId,
-                    orderCancelled.Reason);
+                    marked.SourceEventId);
                 break;
             case Outcome.DuplicateRefund duplicate:
                 _logger.LogInformation(
@@ -157,7 +203,11 @@ public sealed class RefundPaymentHandler
     {
         public sealed record Refunded(PaymentRefunded Event) : Outcome;
 
-        public sealed record NoPayment : Outcome;
+        public sealed record MarkerRecorded : Outcome;
+
+        public sealed record DuplicateMarker : Outcome;
+
+        public sealed record AlreadyMarked(Guid SourceEventId) : Outcome;
 
         public sealed record DuplicateRefund(Payment Payment) : Outcome;
 

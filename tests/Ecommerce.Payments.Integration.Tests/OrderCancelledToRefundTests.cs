@@ -69,7 +69,7 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleMessageAsync_NoPayment_IsCommittedAndChangesNothing()
+    public async Task HandleMessageAsync_NoPayment_IsCommittedAndRefundsNothing()
     {
         using var consumer = CreateCancelledConsumer();
 

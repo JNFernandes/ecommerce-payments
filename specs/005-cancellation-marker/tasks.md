@@ -176,14 +176,14 @@ redelivery, or a different cancellation for the same order, changes nothing and 
 
 ### Tests for User Story 1
 
-- [ ] T013 [P] [US1] Add unit tests to `tests/Ecommerce.Payments.Service.Tests/Payments/RefundPaymentHandlerTests.cs`, using a `FakeTimeProvider` and the inner `ListLogger`:
+- [X] T013 [P] [US1] Add unit tests to `tests/Ecommerce.Payments.Service.Tests/Payments/RefundPaymentHandlerTests.cs`, using a `FakeTimeProvider` and the inner `ListLogger`:
   - `Should_Record_Marker_When_No_Payment_Exists`: `AddAsync` is called with orderId, eventId, `CancelledAt = occurredAt`, `RecordedAt = clock` and reason; the commit happens; no publish; one Information log containing "recorded".
   - `Should_Not_Add_Marker_When_Marker_With_Same_EventId_Exists`: no add, no commit-dependent write, no publish, an Information log "duplicate delivery".
   - `Should_Not_Add_Marker_When_Marker_With_Other_EventId_Exists`: no add, an Information log "already cancelled".
   - `Should_Throw_And_Not_Publish_When_Marker_Save_Keeps_Failing`: `AddAsync` throws every time; an Error log; rethrows; no publish.
 
   Replace the US-04 test that expected "no payment exists" to be ignored.
-- [ ] T014 [P] [US1] Integration tests **(new)** in `tests/Ecommerce.Payments.Integration.Tests/CancellationBeforePaymentTests.cs`, mirroring `OrderCancelledToRefundTests.cs` (drive `OrderCancelledConsumer.HandleMessageAsync` against PostgreSQL):
+- [X] T014 [P] [US1] Integration tests **(new)** in `tests/Ecommerce.Payments.Integration.Tests/CancellationBeforePaymentTests.cs`, mirroring `OrderCancelledToRefundTests.cs` (drive `OrderCancelledConsumer.HandleMessageAsync` against PostgreSQL):
   - `OrderCancelled_Without_Payment_Records_One_Marker`.
   - `Redelivered_OrderCancelled_Leaves_One_Marker`.
   - `Second_OrderCancelled_With_New_EventId_Leaves_Original_Marker`: the stored `SourceEventId` is still the first one.
@@ -191,7 +191,7 @@ redelivery, or a different cancellation for the same order, changes nothing and 
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] Implement the no-payment branch in `src/Ecommerce.Payments.Service/Payments/RefundPaymentHandler.cs`, inside the transaction. Look up the marker with `GetByOrderIdAsync` and handle three cases:
+- [X] T015 [US1] Implement the no-payment branch in `src/Ecommerce.Payments.Service/Payments/RefundPaymentHandler.cs`, inside the transaction. Look up the marker with `GetByOrderIdAsync` and handle three cases:
   - **No marker**: `CancellationMarker.Record(orderId, eventId, occurredAt, _timeProvider.GetUtcNow(), reason)`, then `AddAsync`, then `CommitAsync`, returning `MarkerRecorded`.
   - **Same `SourceEventId`**: return `DuplicateMarker`.
   - **Other `SourceEventId`**: return `AlreadyMarked`.

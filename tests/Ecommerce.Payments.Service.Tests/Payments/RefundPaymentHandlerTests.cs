@@ -1,3 +1,4 @@
+using Ecommerce.Payments.Domain.Orders;
 using Ecommerce.Payments.Domain.Payments;
 using Ecommerce.Payments.Service.IntegrationEvents;
 using Ecommerce.Payments.Service.Orders;
@@ -152,16 +153,81 @@ public class RefundPaymentHandlerTests
     }
 
     [Fact]
-    public async Task Should_Ignore_And_Log_Information_When_No_Payment_Exists()
+    public async Task Should_Record_Marker_When_No_Payment_Exists()
     {
         Stored(null);
-        var cancellation = Cancellation(Guid.NewGuid());
+        var cancellation = Cancellation(Guid.NewGuid()) with { Reason = "stock rejected" };
+        CancellationMarker? added = null;
+        _markers
+            .Setup(m => m.AddAsync(It.IsAny<CancellationMarker>(), It.IsAny<CancellationToken>()))
+            .Callback<CancellationMarker, CancellationToken>((marker, _) => added = marker)
+            .Returns(Task.CompletedTask);
 
         var logger = await HandleAndCaptureLogsAsync(cancellation);
 
-        AssertIgnoredWithSingleInformationLog(logger, cancellation, "no payment exists");
+        Assert.NotNull(added);
+        Assert.Equal(cancellation.AggregateId, added.OrderId);
+        Assert.Equal(cancellation.EventId, added.SourceEventId);
+        Assert.Equal(cancellation.OccurredAt, added.CancelledAt);
+        Assert.Equal(_clock.GetUtcNow(), added.RecordedAt);
+        Assert.Equal("stock rejected", added.Reason);
+        Assert.Equal(1, _unitOfWork.Commits);
+        AssertIgnoredWithSingleInformationLog(logger, cancellation, "Recorded cancellation");
         _repository.Verify(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [Fact]
+    public async Task Should_Not_Add_Marker_When_Marker_With_Same_EventId_Exists()
+    {
+        Stored(null);
+        var cancellation = Cancellation(Guid.NewGuid());
+        StoredMarker(cancellation.AggregateId, cancellation.EventId);
+
+        var logger = await HandleAndCaptureLogsAsync(cancellation);
+
+        _markers.Verify(m => m.AddAsync(It.IsAny<CancellationMarker>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal(0, _unitOfWork.Commits);
+        AssertIgnoredWithSingleInformationLog(logger, cancellation, "duplicate delivery");
+    }
+
+    [Fact]
+    public async Task Should_Not_Add_Marker_When_Marker_With_Other_EventId_Exists()
+    {
+        Stored(null);
+        var cancellation = Cancellation(Guid.NewGuid());
+        var firstEventId = Guid.NewGuid();
+        StoredMarker(cancellation.AggregateId, firstEventId);
+
+        var logger = await HandleAndCaptureLogsAsync(cancellation);
+
+        _markers.Verify(m => m.AddAsync(It.IsAny<CancellationMarker>(), It.IsAny<CancellationToken>()), Times.Never);
+        AssertIgnoredWithSingleInformationLog(logger, cancellation, "already recorded as cancelled");
+        Assert.Contains(firstEventId.ToString(), Assert.Single(logger.Entries).Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Should_Throw_And_Not_Publish_When_Marker_Save_Keeps_Failing()
+    {
+        Stored(null);
+        _markers
+            .Setup(m => m.AddAsync(It.IsAny<CancellationMarker>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("database down"));
+        var logger = new ListLogger<RefundPaymentHandler>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateHandler(logger).HandleAsync(Cancellation(Guid.NewGuid()), CancellationToken.None));
+
+        Assert.Equal(LogLevel.Error, Assert.Single(logger.Entries).Level);
+        Assert.Equal(0, _unitOfWork.Commits);
+        _publisher.Verify(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
+        // 1 attempt + 3 retries.
+        _markers.Verify(m => m.AddAsync(It.IsAny<CancellationMarker>(), It.IsAny<CancellationToken>()), Times.Exactly(4));
+    }
+
+    private void StoredMarker(Guid orderId, Guid sourceEventId) =>
+        _markers
+            .Setup(m => m.GetByOrderIdAsync(orderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CancellationMarker.Rehydrate(orderId, sourceEventId, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, null));
 
     [Theory]
     [InlineData(PaymentStatus.Failed, "never completed")]
@@ -224,20 +290,6 @@ public class RefundPaymentHandlerTests
         Assert.Contains(expectedText, message, StringComparison.Ordinal);
         Assert.Contains(cancellation.AggregateId.ToString(), message, StringComparison.Ordinal);
         Assert.Contains(cancellation.EventId.ToString(), message, StringComparison.Ordinal);
-    }
-
-    /// <summary>Captures log entries (level + rendered message).</summary>
-    private sealed class ListLogger<T> : ILogger<T>
-    {
-        public List<(LogLevel Level, string Message)> Entries { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state)
-            where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     [Fact]
