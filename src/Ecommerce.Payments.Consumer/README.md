@@ -36,7 +36,8 @@ Both consumers derive from `KafkaConsumerBase`: commit only after successful han
 See `appsettings.json` — `ConnectionStrings:Payments`, `Kafka:BootstrapServers`,
 `Kafka:ConsumerGroupId`, `Kafka:OrderPlacedTopic`, `Kafka:OrderCancelledTopic`,
 `Kafka:PaymentProcessedTopic`, `Kafka:PaymentFailedTopic`, `Kafka:PaymentRefundedTopic`,
-`Kafka:ConsumerRetryBaseDelayMs`, `Kafka:ConsumerRetryMaxDelayMs`, `PaymentPolicy:MaxAmountThreshold`, and the `DeadLetterRetry`
+`Kafka:ConsumerRetryBaseDelayMs`, `Kafka:ConsumerRetryMaxDelayMs`, `PaymentPolicy:MaxAmountThreshold`,
+`Persistence:OrderLockTimeoutMs` (per-order lock wait, validated at startup; US-05), and the `DeadLetterRetry`
 section (`IntervalMs`, `BatchSize`, `BaseDelayMs`, `MaxDelayMs`, `MaxRetries`).
 
 ## Running locally

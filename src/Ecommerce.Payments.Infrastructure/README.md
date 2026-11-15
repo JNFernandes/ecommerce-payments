@@ -15,6 +15,16 @@ Outward-facing adapters, kept in separate folders/namespaces and never reference
   index is the durable idempotency guarantee; `GetByOrderIdAsync` rehydrates the aggregate and `SaveRefundAsync` is a conditional update that only succeeds while the payment is still Processed), and `PaymentDeadLetterRepository`
   (implements `IPaymentDeadLetterRepository`; the single owner of `payment_dead_letters`,
   including the `FOR UPDATE SKIP LOCKED` claim query).
+
+  US-05 adds the following:
+  - `CancellationMarkerEntity` and `CancellationMarkerRepository`: the
+    `order_cancellation_markers` table, with primary key `OrderId`, so there is one marker per
+    order.
+  - `OrderUnitOfWork`, which implements the Service port `IOrderUnitOfWork`. It opens a
+    transaction, sets a local `lock_timeout` (`PersistenceOptions.OrderLockTimeoutMs`) and takes
+    `pg_advisory_xact_lock` for the order ([ADR 0004](../../docs/adr/0004-per-order-serialisation.md)).
+    On rollback it clears the change tracker so a retry starts clean.
+  - `AddOrderPersistence()`, which registers both.
 - **`Messaging/`** (Publisher) — `PaymentEventPublisher` (implements
   `IPaymentEventPublisher` and `IRawEventPublisher`; Confluent.Kafka producer). On a publish
   failure *after* a successful save, it writes the event to `payment_dead_letters` (with its

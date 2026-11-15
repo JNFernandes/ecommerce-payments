@@ -19,6 +19,10 @@ Sole home of business logic. `Payment` is the aggregate root, with lifecycle
   `RefundDecision.Ignored(NotCompleted | AlreadyRefunded)` otherwise. Never throws.
 - `Payment.Rehydrate(...)` — persistence only: restores a saved aggregate without running rules.
 
+`Orders/CancellationMarker` (US-05) records that an order was cancelled before its payment
+existed. `CancellationMarker.Record(...)` rejects empty ids, and `Rehydrate(...)` is for
+persistence only. A marker is immutable and is never removed.
+
 Plain C# only — no dependency on EF Core, Confluent.Kafka, or ASP.NET/Worker types, so
 Domain tests run with zero infrastructure. `PaymentStatus` is the only representation of
 payment lifecycle state (no bare strings).

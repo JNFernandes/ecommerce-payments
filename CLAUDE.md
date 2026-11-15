@@ -79,6 +79,17 @@ and marks rows `Resolved`, or reschedules them with exponential backoff until `E
 Startup must never depend on Kafka being reachable: connectivity problems are logged and retried
 in the background.
 
+**Per-order unit of work** (US-05, [ADR 0004](docs/adr/0004-per-order-serialisation.md)):
+- Every handler that reads or changes an order's state runs its read-decide-write step inside
+  `await using var tx = await IOrderUnitOfWork.BeginAsync(orderId)`. That transaction first takes
+  `pg_advisory_xact_lock` for the order; the wait is bounded by `Persistence:OrderLockTimeoutMs`.
+- Commit with `tx.CommitAsync`; disposing without a commit rolls back and clears the change
+  tracker.
+- Wrap the **whole** unit (begin → reads → Domain → save → commit) in
+  `PersistenceRetry.Pipeline`, not single statements.
+- Publish to Kafka only after the delegate returns, never while the lock is held.
+- Register with `services.AddOrderPersistence()`. Tests that build handlers need it too.
+
 ## Idempotency
 
 - Kafka is at-least-once; every handler must be safe to run twice.

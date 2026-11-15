@@ -298,7 +298,7 @@ states:
 
 ## Phase 5: Polish & Cross-Cutting Concerns
 
-- [ ] T022 [P] Write ADR **(new)** `docs/adr/0004-per-order-serialisation.md` from `docs/adr/template.md`:
+- [X] T022 [P] Write ADR **(new)** `docs/adr/0004-per-order-serialisation.md` from `docs/adr/template.md`:
   - Context: the race, as in research R1.
   - Decision: marker table plus `pg_advisory_xact_lock` as the first statement, plus the lock timeout.
   - Rejected alternatives: SERIALIZABLE, re-check after commit, row lock, registry table.
@@ -306,23 +306,23 @@ states:
   - Reference `ecommerce-inventory` ADR 0005.
 
   Add it to `docs/adr/README.md`.
-- [ ] T023 [P] Update `README.md`:
+- [X] T023 [P] Update `README.md`:
   - remove the "Known limitations" entry about `OrderCancelled` arriving before its payment;
   - point the "no inbound dead-letter store" entry at the planned follow-up US-06;
   - describe the cancellation marker and the per-order lock in the event-flow or refunds section;
   - add `Persistence:OrderLockTimeoutMs` to the configuration table;
   - mention the new table.
-- [ ] T024 [P] Update the project READMEs:
+- [X] T024 [P] Update the project READMEs:
   - `src/Ecommerce.Payments.Domain/README.md`: `CancellationMarker`.
   - `src/Ecommerce.Payments.Service/README.md`: the unit of work, the marker branches of both handlers and the `Orders/` ports.
   - `src/Ecommerce.Payments.Infrastructure/README.md`: the table, repository, `OrderUnitOfWork` and options.
   - `src/Ecommerce.Payments.Consumer/README.md`: the new setting.
-- [ ] T025 [P] Update `CLAUDE.md`:
+- [X] T025 [P] Update `CLAUDE.md`:
   - every handler that reads or changes an order's state runs inside `IOrderUnitOfWork.BeginAsync(orderId)` (lock first) and publishes only after commit;
   - wrap the whole unit in `PersistenceRetry`;
   - the new setting;
   - ADR 0004.
-- [ ] T026 Run the full quality gate (`dotnet build`, `dotnet format --verify-no-changes`, `dotnet test`) and `docker build -t ecommerce-payments .`. Mark all tasks `[X]`.
+- [X] T026 Run the full quality gate (`dotnet build`, `dotnet format --verify-no-changes`, `dotnet test`) and `docker build -t ecommerce-payments .`. Mark all tasks `[X]`.
 - [ ] T027 Manual check from `specs/005-cancellation-marker/quickstart.md` ("Manual check") against `ecommerce-infra`. Do it **only** if no other local Payments Consumer is running; otherwise skip it and record the reason here.
 
 ---
