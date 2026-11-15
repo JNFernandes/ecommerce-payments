@@ -25,6 +25,16 @@ Outward-facing adapters, kept in separate folders/namespaces and never reference
     `pg_advisory_xact_lock` for the order ([ADR 0004](../../docs/adr/0004-per-order-serialisation.md)).
     On rollback it clears the change tracker so a retry starts clean.
   - `AddOrderPersistence()`, which registers both.
+
+  US-06 adds the following:
+  - `ConsumedDeadLetterEntity`, mapped to the `consumed_dead_letters` table. The table has a
+    unique index on (Topic, Partition, Offset) and a check that `Attempts` is at least 1.
+  - `IConsumedDeadLetterStore` and `ConsumedDeadLetterStore`, an idempotent
+    `INSERT … ON CONFLICT DO NOTHING`.
+  - `AddConsumedDeadLetterStore()`, which registers the store.
+
+  The Consumer host's `KafkaConsumerBase` uses the store for inbound messages that are malformed
+  or keep failing ([docs/consumed-dead-letters.md](../../docs/consumed-dead-letters.md)).
 - **`Messaging/`** (Publisher) — `PaymentEventPublisher` (implements
   `IPaymentEventPublisher` and `IRawEventPublisher`; Confluent.Kafka producer). On a publish
   failure *after* a successful save, it writes the event to `payment_dead_letters` (with its

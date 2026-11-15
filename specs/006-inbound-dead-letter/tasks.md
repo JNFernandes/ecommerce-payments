@@ -176,7 +176,7 @@ dropped.
 **Independent Test**: follow the document to replay a stored `OrderPlaced`, and check that it is
 processed exactly once.
 
-- [ ] T013 [US3] Write `docs/consumed-dead-letters.md` **(new)**. It covers:
+- [X] T013 [US3] Write `docs/consumed-dead-letters.md` **(new)**. It covers:
   - what lands in the table (after `Kafka:ConsumerMaxAttempts`, or malformed), what does not, and how it differs from `payment_dead_letters`;
   - the columns;
   - a "List" SQL query, newest first, plus a filter by topic;
@@ -185,7 +185,7 @@ processed exactly once.
   - that replaying a malformed message only stores it again, so fix the producer instead.
 
   Link the document from `README.md` and from `docs/dead-letter-retry.md`, the outbound document, which gets a one-line "see also".
-- [ ] T014 [US3] Add `Replayed_Dead_Letter_Is_Processed_Like_A_New_Message` to `tests/Ecommerce.Payments.Component.Tests/MalformedMessageDeadLetterFlowTests.cs`.
+- [X] T014 [US3] Add `Replayed_Dead_Letter_Is_Processed_Like_A_New_Message` to `tests/Ecommerce.Payments.Component.Tests/MalformedMessageDeadLetterFlowTests.cs`.
   - Insert a `consumed_dead_letters` row whose `Payload` is a **valid** `OrderPlaced`, as if it had been stored during an outage.
   - Re-produce `Payload` with `MessageKey` to `Topic`, exactly as the documented procedure does.
   - Assert one `Processed` payment for the order.
@@ -197,27 +197,27 @@ processed exactly once.
 
 ## Phase 5: Polish & Cross-Cutting Concerns
 
-- [ ] T015 [P] Write ADR **(new)** `docs/adr/0005-inbound-dead-letter.md`, from `docs/adr/template.md`.
+- [X] T015 [P] Write ADR **(new)** `docs/adr/0005-inbound-dead-letter.md`, from `docs/adr/template.md`.
   - **Context**: retry in place forever (US-04), and Constitution VI's dead-letter rule.
   - **Decision**: N attempts with backoff, then `consumed_dead_letters` with a unique position and commit only after the store; malformed messages stored with attempts 1; a store failure means no commit; manual replay; a table rather than a topic.
   - **Rejected alternatives**: a dead-letter topic, routing through the Service layer, a persisted attempt count.
   - **Consequences**: ordering within a partition is broken for the skipped message; operators must watch for Error logs.
   - Mention `ecommerce-inventory`'s `consumed_dead_letters`, and add the ADR to `docs/adr/README.md`.
-- [ ] T016 [P] Update `README.md`:
+- [X] T016 [P] Update `README.md`:
   - **Consumer retries paragraph**: add the maximum and the dead-letter step.
   - **Known limitations**: remove "no inbound dead-letter store yet". Add that messages are not replayed automatically and that the attempt count resets on restart.
   - **Background services table**: both consumers dead-letter.
   - **Configuration table**: add `Kafka:ConsumerMaxAttempts`.
   - Link `docs/consumed-dead-letters.md`.
-- [ ] T017 [P] Update the project READMEs:
+- [X] T017 [P] Update the project READMEs:
   - `src/Ecommerce.Payments.Consumer/README.md`: `KafkaConsumerBase` behaviour, `InvalidMessageException` and the new setting.
   - `src/Ecommerce.Payments.Infrastructure/README.md`: the table and the store.
-- [ ] T018 [P] Update `CLAUDE.md`:
+- [X] T018 [P] Update `CLAUDE.md`:
   - new consumers throw `InvalidMessageException` for malformed envelopes and let other exceptions propagate;
   - the base retries, then dead-letters to `consumed_dead_letters`, and commits only after the store;
   - the setting;
   - ADR 0005.
-- [ ] T019 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all tasks `[X]`.
+- [X] T019 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all tasks `[X]`.
 - [ ] T020 Do the manual check from `specs/006-inbound-dead-letter/quickstart.md`, using isolated `us06-manual.*` topics and group as in US-05 T027, and clean up afterwards. Do it **only** if no other local Payments Consumer is running; otherwise skip it and record the reason here.
 
 ---

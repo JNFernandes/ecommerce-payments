@@ -29,14 +29,28 @@ Contains no business logic — see `Ecommerce.Payments.Service` for orchestratio
 | Consumes | `orders.order-placed` | `OrderPlaced` |
 | Consumes | `orders.order-cancelled` | `OrderCancelled` |
 
-Both consumers derive from `KafkaConsumerBase`: commit only after successful handling, retry a failing message in place with capped exponential backoff (`Kafka:ConsumerRetryBaseDelayMs` / `Kafka:ConsumerRetryMaxDelayMs`), never commit past it, and yield before touching Kafka so startup never depends on the broker.
+Both consumers derive from `KafkaConsumerBase`, which does the following:
+- **Commits** only after successful handling.
+- **Retries** a failing message in place with capped exponential backoff
+  (`Kafka:ConsumerRetryBaseDelayMs` / `Kafka:ConsumerRetryMaxDelayMs`), and never commits past it.
+- **Dead-letters (US-06):** after `Kafka:ConsumerMaxAttempts` failed attempts, it stores the
+  message as received in `consumed_dead_letters` through `IConsumedDeadLetterStore`, and commits
+  only after that store has succeeded.
+- **Malformed messages:** a consumer throws `InvalidMessageException` for a malformed envelope,
+  which the base stores at once with `Attempts = 1` and never retries.
+- **Store failures:** if the store fails, nothing is committed and the message is retried.
+- **Startup:** it yields before touching Kafka, so startup never depends on the broker.
+
+See [docs/consumed-dead-letters.md](../../docs/consumed-dead-letters.md) and
+[ADR 0005](../../docs/adr/0005-inbound-dead-letter.md).
 
 ## Configuration
 
 See `appsettings.json` — `ConnectionStrings:Payments`, `Kafka:BootstrapServers`,
 `Kafka:ConsumerGroupId`, `Kafka:OrderPlacedTopic`, `Kafka:OrderCancelledTopic`,
 `Kafka:PaymentProcessedTopic`, `Kafka:PaymentFailedTopic`, `Kafka:PaymentRefundedTopic`,
-`Kafka:ConsumerRetryBaseDelayMs`, `Kafka:ConsumerRetryMaxDelayMs`, `PaymentPolicy:MaxAmountThreshold`,
+`Kafka:ConsumerRetryBaseDelayMs`, `Kafka:ConsumerRetryMaxDelayMs`, `Kafka:ConsumerMaxAttempts`
+(the `Kafka` retry settings are validated at startup), `PaymentPolicy:MaxAmountThreshold`,
 `Persistence:OrderLockTimeoutMs` (per-order lock wait, validated at startup; US-05), and the `DeadLetterRetry`
 section (`IntervalMs`, `BatchSize`, `BaseDelayMs`, `MaxDelayMs`, `MaxRetries`).
 

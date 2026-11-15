@@ -6,6 +6,9 @@ The **dead-letter retry worker** republishes those rows automatically, so a temp
 outage never loses a `PaymentProcessed`, `PaymentFailed` or `PaymentRefunded` event (topics
 `payments.payment-processed`, `payments.payment-failed`, `payments.payment-refunded`).
 
+This page covers **outbound** dead letters only. Inbound messages Payments could not handle go
+to a separate table; see [consumed-dead-letters.md](consumed-dead-letters.md) (US-06).
+
 Design decision: [ADR 0003 — Dead-letter retry](adr/0003-dead-letter-retry.md).
 Feature spec: [`specs/003-dead-letter-retry`](../specs/003-dead-letter-retry/spec.md) (US-03).
 

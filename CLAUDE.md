@@ -102,8 +102,19 @@ in the background.
   payment is already `Refunded`. `SaveRefundAsync` is conditional (only if still Processed) so
   concurrent deliveries cannot refund twice. (`OrderPlacedConsumer` still dedupes by order id —
   pre-existing.)
-- New consumers derive from `KafkaConsumerBase` (commit after success, retry the same message
-  in place with backoff, never commit past a failure).
+- New consumers derive from `KafkaConsumerBase`:
+  - It commits after success, retries the same message in place with backoff, and never commits
+    past a failure.
+  - After `Kafka:ConsumerMaxAttempts` (default 5), it stores the message in
+    `consumed_dead_letters` and commits only after that store succeeds. If the store fails,
+    nothing is committed and the message is retried
+    ([ADR 0005](docs/adr/0005-inbound-dead-letter.md), US-06).
+  - In `HandleMessageAsync`, throw `InvalidMessageException` for a malformed envelope; it is
+    stored with `Attempts = 1` and never retried. Let every other failure propagate. Do not
+    return `true` for bad input.
+  - `consumed_dead_letters` holds inbound messages. `payment_dead_letters` holds outbound
+    events and is retried by the worker. Do not mix them. Replay is manual
+    (`docs/consumed-dead-letters.md`).
 
 ## Event contracts
 
