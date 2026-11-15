@@ -146,19 +146,19 @@ stored once with attempts 1 and the validation error, and both offsets are commi
 
 ### Tests for User Story 2
 
-- [ ] T010 [P] [US2] Update the existing tests:
+- [X] T010 [P] [US2] Update the existing tests:
   - `tests/Ecommerce.Payments.Integration.Tests/OrderCancelledToRefundTests.cs`: rename `HandleMessageAsync_MalformedMessage_IsCommitted` to `HandleMessageAsync_MalformedMessage_Throws_InvalidMessageException`, and assert `await Assert.ThrowsAsync<InvalidMessageException>(...)` and that no refunds were published.
   - `tests/Ecommerce.Payments.Integration.Tests/CancellationBeforePaymentTests.cs`: in `Malformed_OrderCancelled_Records_No_Marker`, assert `ThrowsAsync<InvalidMessageException>` and still no marker.
   - In `tests/Ecommerce.Payments.Component.Tests/KafkaConsumerBaseDeadLetterTests.cs`, add `Invalid_Message_Is_Stored_Once_With_One_Attempt_Without_Retry`. The test consumer throws `InvalidMessageException("missing eventId")` for message "M". Expect it handled exactly once, one store with `Attempts = 1` and an `Error` containing "missing eventId", the next message handled, and the committed offset after both.
   - In the same file, add `Invalid_Message_Store_Failure_Is_Retried`: the store fails once, then succeeds with `Attempts = 1`, and the offset is committed only after that.
-- [ ] T011 [P] [US2] Component test **(new)** `tests/Ecommerce.Payments.Component.Tests/MalformedMessageDeadLetterFlowTests.cs`, with PostgreSQL and Kafka containers, both real consumers hosted and the real `ConsumedDeadLetterStore`. DI is set up as in `CancelBeforePlaceFlowTests.cs`, plus `AddConsumedDeadLetterStore()`.
+- [X] T011 [P] [US2] Component test **(new)** `tests/Ecommerce.Payments.Component.Tests/MalformedMessageDeadLetterFlowTests.cs`, with PostgreSQL and Kafka containers, both real consumers hosted and the real `ConsumedDeadLetterStore`. DI is set up as in `CancelBeforePlaceFlowTests.cs`, plus `AddConsumedDeadLetterStore()`.
   - Produce `not json` with key `"order-1"` to `orders.order-placed`, and `{"eventId":"…","version":1}` to `orders.order-cancelled`.
   - Poll `consumed_dead_letters` until it has 2 rows. Each must have `Attempts = 1`, the correct `Topic`, the raw `Payload` and an `Error` containing the parse or validation error. The `MessageKey` is `"order-1"` for the first.
   - Then produce a valid `OrderPlaced` and assert that it is processed (a `Processed` payment), which shows the partition was not blocked.
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Make the consumers and the base treat malformed messages as dead letters:
+- [X] T012 [US2] Make the consumers and the base treat malformed messages as dead letters:
   - In `src/Ecommerce.Payments.Consumer/Consumers/OrderPlacedConsumer.cs` and `src/Ecommerce.Payments.Consumer/Consumers/OrderCancelledConsumer.cs`, when `TryParse` fails, `throw new InvalidMessageException(error!)` instead of logging and returning `true`. Update the XML docs.
   - In `src/Ecommerce.Payments.Consumer/Consumers/KafkaConsumerBase.cs`, catch `InvalidMessageException` before the general catch. Call `StoreThenCommitAsync` with attempts 1 and log at **Warning**: "Malformed message on {Topic} [{Partition}] @ {Offset}: {Reason}; stored in consumed_dead_letters and committed." There is no backoff on the first store. If the store fails, use the T009 store-failure path.
 

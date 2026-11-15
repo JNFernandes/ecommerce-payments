@@ -87,6 +87,38 @@ public class KafkaConsumerBaseDeadLetterTests : IAsyncLifetime
         Assert.Equal(2, CommittedOffset(topic, groupId));
     }
 
+    [Fact]
+    public async Task Invalid_Message_Is_Stored_Once_With_One_Attempt_Without_Retry()
+    {
+        var (topic, groupId) = NewTopic();
+        Produce(topic, ("k1", "M"), ("k1", "B"));
+        var store = new RecordingConsumedDeadLetterStore();
+
+        var consumer = await RunUntilAsync(topic, groupId, store, c => c.Calls.Contains("B"));
+
+        Assert.Equal(["M", "B"], consumer.Calls.ToArray());
+        var stored = Assert.Single(store.Stored);
+        Assert.Equal(1, stored.Attempts);
+        Assert.Equal("M", stored.Payload);
+        Assert.Contains("missing eventId", stored.Error, StringComparison.Ordinal);
+        Assert.Equal(2, CommittedOffset(topic, groupId));
+    }
+
+    [Fact]
+    public async Task Invalid_Message_Store_Failure_Is_Retried()
+    {
+        var (topic, groupId) = NewTopic();
+        Produce(topic, ("k1", "M"), ("k1", "B"));
+        var store = new RecordingConsumedDeadLetterStore(failFirstCalls: 1);
+
+        var consumer = await RunUntilAsync(topic, groupId, store, c => c.Calls.Contains("B"));
+
+        Assert.Equal(["M", "M", "B"], consumer.Calls.ToArray());
+        Assert.Equal(1, store.FailedCalls);
+        Assert.Equal(1, Assert.Single(store.Stored).Attempts);
+        Assert.Equal(2, CommittedOffset(topic, groupId));
+    }
+
     private async Task<ScriptedConsumer> RunUntilAsync(
         string topic,
         string groupId,
