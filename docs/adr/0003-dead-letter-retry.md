@@ -1,6 +1,6 @@
 # 0003. Dead-letter retry worker with SKIP LOCKED claiming and exponential backoff
 
-- **Status**: Accepted
+- **Status**: Superseded by [0006](0006-transactional-outbox.md)
 - **Date**: 2026-11-12
 
 ## Context

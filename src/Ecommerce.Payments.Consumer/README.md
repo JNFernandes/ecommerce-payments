@@ -20,7 +20,7 @@ Contains no business logic — see `Ecommerce.Payments.Service` for orchestratio
 |---|---|---|
 | `OrderPlacedConsumer` | this project | Consumes `orders.order-placed` and runs the payment write flow. |
 | `OrderCancelledConsumer` | this project | Consumes `orders.order-cancelled` and hands each cancellation to `RefundPaymentHandler` (US-04). |
-| `DeadLetterRetryWorker` | `Ecommerce.Payments.Infrastructure/DeadLetters` | Republishes `payment_dead_letters` rows with backoff ([docs/dead-letter-retry.md](../../docs/dead-letter-retry.md)). |
+| `OutboxRelayWorker` | `Ecommerce.Payments.Infrastructure/Outbox` | Publishes `payment_outbox` entries in order per payment, with backoff ([docs/outbox.md](../../docs/outbox.md), US-07). |
 
 ## Topics
 
@@ -51,8 +51,8 @@ See `appsettings.json` — `ConnectionStrings:Payments`, `Kafka:BootstrapServers
 `Kafka:PaymentProcessedTopic`, `Kafka:PaymentFailedTopic`, `Kafka:PaymentRefundedTopic`,
 `Kafka:ConsumerRetryBaseDelayMs`, `Kafka:ConsumerRetryMaxDelayMs`, `Kafka:ConsumerMaxAttempts`
 (the `Kafka` retry settings are validated at startup), `PaymentPolicy:MaxAmountThreshold`,
-`Persistence:OrderLockTimeoutMs` (per-order lock wait, validated at startup; US-05), and the `DeadLetterRetry`
-section (`IntervalMs`, `BatchSize`, `BaseDelayMs`, `MaxDelayMs`, `MaxRetries`).
+`Persistence:OrderLockTimeoutMs` (per-order lock wait, validated at startup; US-05), and the `OutboxRelay`
+section (`PollIntervalMs`, `BatchSize`, `BaseDelayMs`, `MaxDelayMs`, `MaxRetries`).
 
 ## Running locally
 

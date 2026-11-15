@@ -38,16 +38,13 @@ Templates / runtime docs:
 - ✅ .specify/templates/tasks-template.md — no change.
 - ✅ .specify/templates/commands/*.md — the directory is not present in this repo.
 - ✅ CLAUDE.md — version reference and write-flow summary updated to v1.3.0.
-- ⚠ README.md, docs/dead-letter-retry.md, docs/adr/0003 — these still describe the US-03
-  dead-letter mechanism that is on `main`. Update them, and supersede ADR 0003 if needed, in
-  US-07 (specs/007-transactional-outbox).
+- ✅ README.md, docs/outbox.md (replaces docs/dead-letter-retry.md), ADR 0006 (supersedes ADR 0003) —
+  updated by US-07 (specs/007-transactional-outbox).
 - ⚠ specs/001–006 — written against earlier versions; intentionally not modified.
 
 Follow-up TODOs:
-- The code does not implement the outbox yet. Tracked by US-07.
-- Open question US-07 Q1: should the outbox reuse `payment_dead_letters` (option A) or replace
-  it (option B)? This text requires a **single** outbound mechanism, which fits A or B but not
-  C.
+- None. US-07 implements the outbox (Q1 resolved: option A, `payment_dead_letters` became
+  `payment_outbox` in place).
 -->
 
 # ecommerce-payments Constitution

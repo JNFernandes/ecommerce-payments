@@ -269,29 +269,29 @@ delivery recovers, the processed message is consumed before the refunded one.
 
 ## Phase 5: Polish & Cross-Cutting Concerns
 
-- [ ] T018 [P] Write the ADR **(new)** `docs/adr/0006-transactional-outbox.md` from the template.
+- [X] T018 [P] Write the ADR **(new)** `docs/adr/0006-transactional-outbox.md` from the template.
   - **Context**: the crash gap and out-of-order delivery.
   - **Decision**: the outbox in the payment transaction, the relay reusing ADR 0003's claim and backoff, the ordering query, the 250 ms poll, and evolving the table instead of adding one (Q1 = A).
   - **Rejected**: a new table (B), keeping both stores (C), `LISTEN/NOTIFY`, and an in-process signal.
   - **Consequences**: at-least-once with the same `eventId`, `Exhausted` blocking later events for that payment, the polling load, and the stop-migrate-start upgrade.
   - Set ADR 0003's status to `Superseded by 0006` in `docs/adr/0003-dead-letter-retry.md`, and update `docs/adr/README.md`.
-- [ ] T019 [P] Write `docs/outbox.md` **(new)**, replacing `docs/dead-letter-retry.md` with `git rm`.
+- [X] T019 [P] Write `docs/outbox.md` **(new)**, replacing `docs/dead-letter-retry.md` with `git rm`.
   - Cover how the outbox works, the statuses, the settings (`OutboxRelay`), ordering, example SQL (pending, exhausted, blocked per payment), re-queueing an `Exhausted` entry (research R6), and the upgrade note.
   - Update every link to the old file: README, `docs/consumed-dead-letters.md`, `CLAUDE.md`, the project READMEs and ADR 0005.
-- [ ] T020 [P] Update `README.md`:
+- [X] T020 [P] Update `README.md`:
   - **Write flow invariant and event flow**: the outbox.
   - **Background services**: rename `DeadLetterRetryWorker` to `OutboxRelayWorker` and describe it.
   - **Known limitations**: remove the "no transactional outbox" entry; add "`Exhausted` entries block later events for the same payment until re-queued".
   - **Configuration table**: replace the `DeadLetterRetry` keys with the `OutboxRelay` keys.
   - **Upgrade note**: stop, migrate, start.
-- [ ] T021 [P] Update the project READMEs:
+- [X] T021 [P] Update the project READMEs:
   - `src/Ecommerce.Payments.Service/README.md`: `IPaymentOutbox`, and handlers that never publish.
   - `src/Ecommerce.Payments.Infrastructure/README.md`: the `Outbox/` folder, the `payment_outbox` table, and `PaymentEventPublisher` as raw-only.
   - `src/Ecommerce.Payments.Consumer/README.md`: the hosted services and the configuration.
-- [ ] T022 [P] Update `CLAUDE.md`:
+- [X] T022 [P] Update `CLAUDE.md`:
   - replace the v1.3.0 note and the "Dead-letter retry" block with the actual outbox flow and rules: handlers add entries through `IPaymentOutbox` inside the order transaction; nothing calls the Publisher except the relay; there is one outbound store; ordering is per payment;
   - update the event-contracts notes and the stack test list.
-- [ ] T023 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all tasks `[X]`.
+- [X] T023 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all tasks `[X]`.
 - [ ] T024 Do the manual check from `specs/007-transactional-outbox/quickstart.md` against `ecommerce-infra`.
   - Use isolated `us07-manual.*` topics and the group `us07-manual-check`.
   - Apply the migration, then cover the healthy path, the restart, and a broker outage.

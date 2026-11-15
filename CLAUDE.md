@@ -9,7 +9,7 @@ constitution wins. Architectural decisions live in `docs/adr/`.
 - .NET 10 / C# **Worker Service** — a pure Kafka consumer/producer, no HTTP API.
 - Kafka via `Confluent.Kafka`; EF Core + PostgreSQL (Npgsql).
 - Tests: xUnit, Moq, `FakeTimeProvider`, testcontainers-dotnet. Unit tests: Domain.Tests,
-  Service.Tests, Infrastructure.Tests (dead-letter retry); Integration.Tests (PostgreSQL
+  Service.Tests, Infrastructure.Tests (outbox relay); Integration.Tests (PostgreSQL
   container); Component.Tests (PostgreSQL + Kafka containers).
 - Local infrastructure comes from the sibling `ecommerce-infra` repo (docker compose):
   Kafka on `localhost:9092`, Postgres for payments on `localhost:5434`
@@ -42,51 +42,55 @@ the `ecommerce-infra` defaults above.
 | Layer | Project | Rules |
 |---|---|---|
 | Consumer | `Ecommerce.Payments.Consumer` | Hosted services. Deserialize into typed DTOs, validate the envelope, delegate. No business logic. Commit offsets only after the Service finishes. Catch every exception — one bad message never crashes the host. |
-| Service | `Ecommerce.Payments.Service` | Orchestrates Domain → Repository → Publisher. No business rules (no branching on amounts/statuses). |
+| Service | `Ecommerce.Payments.Service` | Orchestrates Domain → Repository (state change + outbox entry in one transaction). Never publishes. No business rules (no branching on amounts/statuses). |
 | Domain | `Ecommerce.Payments.Domain` | `Payment` aggregate owns every rule and transition (`Process`, `Fail`, `Refund`). Plain C#: no EF Core, Kafka or hosting types. No public status setters. |
 | Repository | `Ecommerce.Payments.Infrastructure/Persistence` | EF Core behind `IPaymentRepository`. Never leak EF types into Domain. |
-| Publisher | `Ecommerce.Payments.Infrastructure/Messaging` | Kafka producer behind `IPaymentEventPublisher`. Called only by the Service. |
+| Publisher | `Ecommerce.Payments.Infrastructure/Messaging` | Kafka producer behind `IRawEventPublisher`. Called only by the outbox relay, never by the Service (US-07). |
 
 Also: no `dynamic`/`object` for event data (enforced by `BannedSymbols.txt`), nullable enabled,
 `PaymentStatus` enum instead of strings, domain exceptions instead of `null`/`bool` returns.
 
-## Write flow (order matters)
+## Write flow (order matters): transactional outbox
+
+This follows constitution v1.3.0 Principle II, US-07 and
+[ADR 0006](docs/adr/0006-transactional-outbox.md).
 
 1. Consume and deserialize the event.
 2. Domain executes the transition and raises the domain event.
-3. **Save to PostgreSQL first.** If the save fails: publish nothing, do not commit the offset,
-   retry.
-4. **Then publish to Kafka.** If the publish fails: log, write the event to
-   `payment_dead_letters`, and still commit the offset (the DB is the source of truth).
-5. Commit the offset.
+3. **In one transaction**, save the state change **and** record the event in `payment_outbox`.
+   Use `IPaymentOutbox.AddProcessedAsync`, `AddFailedAsync` or `AddRefundedAsync` inside the
+   order transaction, after the save and before `CommitAsync`.
+   - If the transaction fails, nothing is saved and nothing is published. Do not commit the
+     offset; retry.
+4. Commit the offset once the transaction has committed. Do not wait for Kafka.
+5. The **outbox relay** publishes the entry unchanged: same `eventId`, topic and key.
 
-Publishing before a confirmed save is a critical violation.
+Handlers never publish. Nothing except the relay calls `IRawEventPublisher`, and there is no
+`IPaymentEventPublisher`. Publishing anything other than a committed outbox entry is a critical
+violation.
 
-> **Constitution v1.3.0 changes this flow** (transactional outbox, US-07, in progress in
-> `specs/007-transactional-outbox`). The target flow has three parts:
-> - The Service saves the state change **and** an outbox entry in one transaction, and never
->   calls the Publisher.
-> - The Consumer commits the offset after that transaction.
-> - A background outbox relay publishes committed entries unchanged, in recorded order per
->   payment, with backoff, `SKIP LOCKED` claiming and `Pending` / `Published` / `Exhausted`
->   statuses.
->
-> There is a single outbound store. Until US-07 is merged, the code on `main` follows the
-> steps above and the dead-letter retry below. New code must not add more direct-publish paths.
+**Outbox relay**: `OutboxRelayWorker` and `OutboxRelayProcessor`, in
+`Ecommerce.Payments.Infrastructure/Outbox`, registered in the Consumer host. Details are in
+`docs/outbox.md`.
+- It polls every `OutboxRelay:PollIntervalMs` (250 ms). Each entry is claimed in its own
+  transaction with `FOR UPDATE SKIP LOCKED`, in `Sequence` order.
+- **Never ahead of an unpublished earlier entry for the same payment.** An `Exhausted` entry
+  blocks later events for that payment until it is re-queued.
+- On success it marks the entry `Published`. On failure it backs off exponentially, and marks
+  the entry `Exhausted` after `MaxRetries`.
 
-**Dead-letter retry** (US-03): `DeadLetterRetryWorker` (`Ecommerce.Payments.Infrastructure/DeadLetters`,
-registered in the Consumer host) claims due `PendingRetry` rows one per transaction with
-`FOR UPDATE SKIP LOCKED`, republishes the stored payload unchanged (same topic, key, `eventId`)
-and marks rows `Resolved`, or reschedules them with exponential backoff until `Exhausted` after
-`MaxRetries`. Settings: `DeadLetterRetry` section. Details: `docs/dead-letter-retry.md`,
-`docs/adr/0003-dead-letter-retry.md`. Rules:
-- Retry paths publish through `IRawEventPublisher.PublishRawAsync` (throws, never
-  dead-letters) — never through `IPaymentEventPublisher`, which creates a new event id and a new
-  dead-letter row on failure.
-- All dead-letter persistence goes through `IPaymentDeadLetterRepository`.
-- All time decisions use the injected `TimeProvider` (tests use `FakeTimeProvider`). PostgreSQL
-  stores microseconds, so tests comparing stored timestamps should start fake clocks on whole
-  seconds.
+Rules:
+- There is a single outbound store, `payment_outbox`. Do not add another dead-letter path for
+  publishes.
+- The relay persists through `IPaymentOutboxRepository`. Handlers write through
+  `IPaymentOutbox` (`AddPaymentOutbox()`). Tests that build handlers need both of these, plus
+  `AddOrderPersistence()`.
+- Integration tests assert recorded events with `OutboxReader`. Component tests host the relay
+  through `AddOutboxRelay()` from `OutboxTestServices`.
+- All time decisions use the injected `TimeProvider`; tests use `FakeTimeProvider`.
+  - PostgreSQL stores microseconds, so tests that compare stored timestamps should start fake
+    clocks on whole seconds.
+  - Tests that make entries due must use the host clock, not the database's `now()`.
 
 Startup must never depend on Kafka being reachable: connectivity problems are logged and retried
 in the background.
@@ -99,7 +103,7 @@ in the background.
   tracker.
 - Wrap the **whole** unit (begin → reads → Domain → save → commit) in
   `PersistenceRetry.Pipeline`, not single statements.
-- Publish to Kafka only after the delegate returns, never while the lock is held.
+- Record events in the outbox inside the transaction; never publish from a handler (the relay does).
 - Register with `services.AddOrderPersistence()`. Tests that build handlers need it too.
 
 ## Idempotency
@@ -124,8 +128,8 @@ in the background.
   - In `HandleMessageAsync`, throw `InvalidMessageException` for a malformed envelope; it is
     stored with `Attempts = 1` and never retried. Let every other failure propagate. Do not
     return `true` for bad input.
-  - `consumed_dead_letters` holds inbound messages. `payment_dead_letters` holds outbound
-    events and is retried by the worker. Do not mix them. Replay is manual
+  - `consumed_dead_letters` holds inbound messages. `payment_outbox` holds every outbound
+    event and is published by the relay. Do not mix them. Inbound replay is manual
     (`docs/consumed-dead-letters.md`).
 
 ## Event contracts
