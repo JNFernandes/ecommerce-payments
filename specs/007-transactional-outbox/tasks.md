@@ -208,12 +208,12 @@ Commit: `feat(US-07): record payment events in the outbox with the state change`
 **Independent Test**: 20 orders with a healthy broker. Measure from the `OrderPlaced` produce to
 the `PaymentProcessed` consume: p95 under 1 s, maximum under 2 s.
 
-- [ ] T013 [P] [US2] Component test **(new)** `tests/Ecommerce.Payments.Component.Tests/OutboxLatencyTests.cs`:
+- [X] T013 [P] [US2] Component test **(new)** `tests/Ecommerce.Payments.Component.Tests/OutboxLatencyTests.cs`:
   - `Healthy_Path_Publishes_Within_One_Second_At_P95`. Host the consumers and the relay with the production default `PollIntervalMs`, read from `new OutboxRelayOptions()`.
   - Produce 20 `OrderPlaced` messages, 100 ms apart, and record each produce timestamp.
   - Consume `payments.payment-processed` and match messages by `orderId`.
   - Assert p95 under 1000 ms and maximum under 2000 ms. Measure from row `RecordedAt` to consume time, so consumer start-up is excluded.
-- [ ] T014 [US2] In `src/Ecommerce.Payments.Infrastructure/Outbox/OutboxRelayOptions.cs`:
+- [X] T014 [US2] In `src/Ecommerce.Payments.Infrastructure/Outbox/OutboxRelayOptions.cs`:
   - set `PollIntervalMs` to default 250 and `BatchSize` to default 100;
   - keep the `IsValid()` rules.
 

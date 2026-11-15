@@ -6,10 +6,10 @@ using Microsoft.Extensions.Options;
 namespace Ecommerce.Payments.Infrastructure.Outbox;
 
 /// <summary>
-/// Hosted service that retries dead-lettered payment events (US-03, ADR 0003,
-/// Constitution Principle VI "Dead-letter retry"). Every
-/// <see cref="OutboxRelayOptions.PollIntervalMs"/> it runs one <see cref="IOutboxRelayProcessor"/>
-/// cycle in a fresh DI scope.
+/// The outbox relay (US-07, ADR 0006; Constitution v1.3.0, Principle VI "Outbox relay"): the
+/// only component that publishes payment events. It runs one <see cref="IOutboxRelayProcessor"/>
+/// cycle immediately, then every <see cref="OutboxRelayOptions.PollIntervalMs"/>, each in a
+/// fresh DI scope.
 ///
 /// Startup never waits on Kafka or the database: <see cref="ExecuteAsync"/> yields before doing
 /// any work, and failures inside a cycle are logged and retried on the next interval instead of
