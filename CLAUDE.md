@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Guidance for Claude Code in this repository. The source of truth for every rule here is
-`.specify/memory/constitution.md` (v1.1.0); if this file and the constitution disagree, the
+`.specify/memory/constitution.md` (v1.2.0); if this file and the constitution disagree, the
 constitution wins. Architectural decisions live in `docs/adr/`.
 
 ## Stack
@@ -79,6 +79,17 @@ and marks rows `Resolved`, or reschedules them with exponential backoff until `E
 Startup must never depend on Kafka being reachable: connectivity problems are logged and retried
 in the background.
 
+**Per-order unit of work** (US-05, [ADR 0004](docs/adr/0004-per-order-serialisation.md)):
+- Every handler that reads or changes an order's state runs its read-decide-write step inside
+  `await using var tx = await IOrderUnitOfWork.BeginAsync(orderId)`. That transaction first takes
+  `pg_advisory_xact_lock` for the order; the wait is bounded by `Persistence:OrderLockTimeoutMs`.
+- Commit with `tx.CommitAsync`; disposing without a commit rolls back and clears the change
+  tracker.
+- Wrap the **whole** unit (begin → reads → Domain → save → commit) in
+  `PersistenceRetry.Pipeline`, not single statements.
+- Publish to Kafka only after the delegate returns, never while the lock is held.
+- Register with `services.AddOrderPersistence()`. Tests that build handlers need it too.
+
 ## Idempotency
 
 - Kafka is at-least-once; every handler must be safe to run twice.
@@ -107,8 +118,12 @@ in the background.
 - Every published payment event carries `eventId`, `occurredAt`, `aggregateId` = the **payment**
   id, `version`, and a separate `orderId` = the order id. Downstream consumers must use
   `orderId` to identify the order.
-- Refunds only from `Processed`. A refund request for a `Failed`, already `Refunded` or unknown
-  payment is logged and ignored (offset committed) — it never throws.
+- Refunds only from `Processed`. A refund request for a `Failed` or already `Refunded` payment
+  is logged and ignored (offset committed) — it never throws.
+- A cancellation for an order with **no payment** records a cancellation marker (one per order,
+  unique constraint). An `OrderPlaced` for a marked order creates no payment and publishes
+  nothing. Marker and payment creation for the same order must be mutually exclusive under
+  concurrency (constitution v1.2.0, Principle VI "Cancellation markers").
 - JSON payloads; breaking changes need a new topic version (e.g. `payments.payment-processed.v2`).
 - Event classes carry XML doc comments on every field.
 

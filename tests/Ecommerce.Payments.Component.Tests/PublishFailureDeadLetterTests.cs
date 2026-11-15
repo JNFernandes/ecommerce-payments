@@ -73,6 +73,7 @@ public class PublishFailureDeadLetterTests : IAsyncLifetime
         services.AddLogging();
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddOrderPersistence();
         services.AddScoped<ProcessPaymentHandler>();
 
         // The Consumer's own Kafka config is irrelevant here (HandleMessageAsync is driven

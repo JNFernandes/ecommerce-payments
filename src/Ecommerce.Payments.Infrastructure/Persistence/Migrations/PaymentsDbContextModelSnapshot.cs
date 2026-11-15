@@ -22,6 +22,29 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Ecommerce.Payments.Infrastructure.Persistence.Entities.CancellationMarkerEntity", b =>
+                {
+                    b.Property<Guid>("OrderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CancelledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("SourceEventId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("OrderId");
+
+                    b.ToTable("order_cancellation_markers", (string)null);
+                });
+
             modelBuilder.Entity("Ecommerce.Payments.Infrastructure.Persistence.Entities.PaymentDeadLetterEntity", b =>
                 {
                     b.Property<Guid>("Id")

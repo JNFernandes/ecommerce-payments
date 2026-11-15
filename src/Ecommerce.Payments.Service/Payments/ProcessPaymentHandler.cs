@@ -1,5 +1,6 @@
 using Ecommerce.Payments.Domain.Payments;
 using Ecommerce.Payments.Service.IntegrationEvents;
+using Ecommerce.Payments.Service.Orders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -7,8 +8,9 @@ namespace Ecommerce.Payments.Service.Payments;
 
 /// <summary>
 /// Orchestrates the end-to-end workflow for one consumed <c>OrderPlaced</c> message:
+/// per-order transaction (<see cref="IOrderUnitOfWork"/>) → idempotency check →
 /// Domain (<see cref="Payment.CreatePending"/> / <see cref="Payment.Evaluate"/>) →
-/// Repository (<see cref="IPaymentRepository.SaveAsync"/>) →
+/// Repository (<see cref="IPaymentRepository.SaveAsync"/>) → commit →
 /// Publisher (<see cref="IPaymentEventPublisher.PublishAsync"/> or
 /// <see cref="IPaymentEventPublisher.PublishFailedAsync"/>), strictly in that order
 /// (Constitution Principle II). Contains no business rules of its own — those belong to Domain;
@@ -18,67 +20,54 @@ namespace Ecommerce.Payments.Service.Payments;
 public sealed class ProcessPaymentHandler
 {
     private readonly IPaymentRepository _repository;
+    private readonly ICancellationMarkerRepository _markers;
+    private readonly IOrderUnitOfWork _unitOfWork;
     private readonly IPaymentEventPublisher _publisher;
     private readonly decimal _maxAmountThreshold;
     private readonly ILogger<ProcessPaymentHandler> _logger;
 
+    /// <summary>Creates the handler for one DI scope.</summary>
     public ProcessPaymentHandler(
         IPaymentRepository repository,
+        ICancellationMarkerRepository markers,
+        IOrderUnitOfWork unitOfWork,
         IPaymentEventPublisher publisher,
         IOptions<PaymentPolicyOptions> paymentPolicyOptions,
         ILogger<ProcessPaymentHandler> logger)
     {
         _repository = repository;
+        _markers = markers;
+        _unitOfWork = unitOfWork;
         _publisher = publisher;
         _maxAmountThreshold = paymentPolicyOptions.Value.MaxAmountThreshold;
         _logger = logger;
     }
 
     /// <summary>
-    /// Processes a single validated <c>OrderPlaced</c> event: creates and evaluates the
-    /// <see cref="Payment"/> (Domain decides Processed vs. Failed — see
-    /// <see cref="Payment.Evaluate"/>), durably saves it (with a bounded retry for transient
-    /// failures), then publishes the resulting event to the matching topic. The save MUST
-    /// complete successfully before the publish is attempted; if it never does, the failure is
-    /// logged with full context and propagated so the Consumer does not commit the offset
-    /// (Kafka redelivery drives the next attempt — Constitution Principle II / User Story 3 of
-    /// the companion "process payment" feature). Redelivery of an <c>OrderPlaced</c> message
-    /// whose order already has any recorded outcome is a no-op — no Domain call, no save, no
-    /// publish (Constitution Principle II / User Story 2).
+    /// Processes a single validated <c>OrderPlaced</c> event. Inside one per-order transaction
+    /// (which serialises it against an <c>OrderCancelled</c> for the same order — ADR 0004):
+    /// returns if the order already has a payment (idempotency, Constitution II); returns with
+    /// one Information log, creating and publishing nothing, if the order has a cancellation
+    /// marker (Constitution VI "Cancellation markers"); otherwise creates and evaluates the
+    /// <see cref="Payment"/>, saves it and commits. Only after the
+    /// commit is the resulting event published. The whole transaction is retried for transient
+    /// failures; if it never succeeds, the failure is logged and propagated so the Consumer does
+    /// not commit the offset.
     /// </summary>
     public async Task HandleAsync(OrderPlacedEvent orderPlaced, CancellationToken cancellationToken)
     {
-        Payment payment;
-        PaymentDomainEvent outcome;
-
         var orderId = orderPlaced.AggregateId;
+        Outcome outcome;
 
         try
         {
-            // Both DB calls (the idempotency check and the save) are equally subject to
-            // transient PostgreSQL failures, so both are retried — not just the save.
-            var alreadyExists = await PersistenceRetry.Pipeline.ExecuteAsync(
-                async ct => await _repository.ExistsByOrderIdAsync(orderId, ct),
-                cancellationToken);
-            if (alreadyExists)
-            {
-                return;
-            }
-
-            payment = Payment.CreatePending(
-                orderId,
-                orderPlaced.CustomerId,
-                orderPlaced.TotalAmount,
-                OrderPlacedEvent.DefaultCurrency,
-                orderPlaced.EventId);
-
-            outcome = payment.Evaluate(_maxAmountThreshold);
-
-            await PersistenceRetry.Pipeline.ExecuteAsync(
-                async ct => await _repository.SaveAsync(payment, ct),
+            // The whole unit is retried: after a failure the transaction is aborted, so the
+            // reads must be repeated under a fresh lock.
+            outcome = await PersistenceRetry.Pipeline.ExecuteAsync(
+                async ct => await CreatePaymentAsync(orderPlaced, ct),
                 cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(
                 ex,
@@ -88,18 +77,67 @@ public sealed class ProcessPaymentHandler
             throw;
         }
 
-        // A business failure is a normal, expected outcome (Constitution FR-008 of the
-        // "handle payment failure" feature) — it flows through this same success path with a
-        // different event type, never through the catch block above, so it is never logged as
-        // an error.
+        // A business failure is a normal, expected outcome — it flows through this same success
+        // path with a different event type, never through the catch block above.
         switch (outcome)
         {
-            case PaymentProcessed processed:
+            case Outcome.Created { Event: PaymentProcessed processed }:
                 await _publisher.PublishAsync(processed, cancellationToken);
                 break;
-            case PaymentFailed failed:
+            case Outcome.Created { Event: PaymentFailed failed }:
                 await _publisher.PublishFailedAsync(failed, cancellationToken);
                 break;
+            case Outcome.OrderCancelled cancelled:
+                _logger.LogInformation(
+                    "Not charging order {OrderId} (OrderPlaced {EventId}): the order was already cancelled by " +
+                    "OrderCancelled {CancelEventId}; no payment created and nothing published.",
+                    orderId,
+                    orderPlaced.EventId,
+                    cancelled.CancelEventId);
+                break;
         }
+    }
+
+    /// <summary>One attempt inside the per-order transaction; commits only when it writes.</summary>
+    private async Task<Outcome> CreatePaymentAsync(OrderPlacedEvent orderPlaced, CancellationToken cancellationToken)
+    {
+        var orderId = orderPlaced.AggregateId;
+        await using var transaction = await _unitOfWork.BeginAsync(orderId, cancellationToken);
+
+        if (await _repository.ExistsByOrderIdAsync(orderId, cancellationToken))
+        {
+            return new Outcome.AlreadyExists();
+        }
+
+        // The cancellation overtook this OrderPlaced: never charge it (Constitution VI
+        // "Cancellation markers").
+        var marker = await _markers.GetByOrderIdAsync(orderId, cancellationToken);
+        if (marker is not null)
+        {
+            return new Outcome.OrderCancelled(marker.SourceEventId);
+        }
+
+        var payment = Payment.CreatePending(
+            orderId,
+            orderPlaced.CustomerId,
+            orderPlaced.TotalAmount,
+            OrderPlacedEvent.DefaultCurrency,
+            orderPlaced.EventId);
+
+        var outcome = payment.Evaluate(_maxAmountThreshold);
+
+        await _repository.SaveAsync(payment, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new Outcome.Created(outcome);
+    }
+
+    /// <summary>Result of one attempt; decided inside the transaction, acted on after it.</summary>
+    private abstract record Outcome
+    {
+        public sealed record Created(PaymentDomainEvent Event) : Outcome;
+
+        public sealed record AlreadyExists : Outcome;
+
+        public sealed record OrderCancelled(Guid CancelEventId) : Outcome;
     }
 }

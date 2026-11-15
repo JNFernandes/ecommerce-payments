@@ -23,6 +23,12 @@ builder.Services
         "DeadLetterRetry settings must be positive and MaxDelayMs must be >= BaseDelayMs.")
     .ValidateOnStart();
 
+builder.Services
+    .AddOptions<PersistenceOptions>()
+    .Bind(builder.Configuration.GetSection(PersistenceOptions.SectionName))
+    .Validate(options => options.OrderLockTimeoutMs > 0, "Persistence:OrderLockTimeoutMs must be positive.")
+    .ValidateOnStart();
+
 builder.Services.AddSingleton(TimeProvider.System);
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
@@ -30,6 +36,8 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
 
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+// Per-order lock (ADR 0004) and cancellation markers (US-05).
+builder.Services.AddOrderPersistence();
 // Singleton: the Kafka producer it wraps is designed to be long-lived and reused, not
 // recreated per message. One instance serves both the normal (dead-lettering) publish path and
 // the raw publish used by the dead-letter retry worker.

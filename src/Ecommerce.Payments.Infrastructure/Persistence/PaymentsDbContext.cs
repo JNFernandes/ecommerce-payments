@@ -5,8 +5,9 @@ namespace Ecommerce.Payments.Infrastructure.Persistence;
 
 /// <summary>
 /// EF Core context for the payments schema — the <c>payments</c> table (with its idempotency
-/// unique index on <c>order_id</c>) and the <c>payment_dead_letters</c> table (with its partial
-/// due-row index used by the dead-letter retry worker).
+/// unique index on <c>order_id</c>), the <c>payment_dead_letters</c> table (with its partial
+/// due-row index used by the dead-letter retry worker) and the <c>order_cancellation_markers</c>
+/// table (primary key <c>OrderId</c>: one marker per order).
 /// </summary>
 public sealed class PaymentsDbContext : DbContext
 {
@@ -21,6 +22,9 @@ public sealed class PaymentsDbContext : DbContext
 
     /// <summary>The <c>payment_dead_letters</c> table: events that failed to publish, with retry bookkeeping.</summary>
     public DbSet<PaymentDeadLetterEntity> PaymentDeadLetters => Set<PaymentDeadLetterEntity>();
+
+    /// <summary>The <c>order_cancellation_markers</c> table: orders cancelled before their payment existed.</summary>
+    public DbSet<CancellationMarkerEntity> CancellationMarkers => Set<CancellationMarkerEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -43,6 +47,12 @@ public sealed class PaymentsDbContext : DbContext
             deadLetter.HasIndex(d => d.NextRetryAt)
                 .HasDatabaseName("IX_payment_dead_letters_due")
                 .HasFilter("\"Status\" = 'PendingRetry'");
+        });
+
+        modelBuilder.Entity<CancellationMarkerEntity>(marker =>
+        {
+            marker.ToTable("order_cancellation_markers");
+            marker.HasKey(m => m.OrderId);
         });
     }
 }

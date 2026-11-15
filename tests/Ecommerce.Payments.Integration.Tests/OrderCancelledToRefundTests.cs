@@ -69,7 +69,7 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleMessageAsync_NoPayment_IsCommittedAndChangesNothing()
+    public async Task HandleMessageAsync_NoPayment_IsCommittedAndRefundsNothing()
     {
         using var consumer = CreateCancelledConsumer();
 
@@ -183,6 +183,7 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddOrderPersistence();
         services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();

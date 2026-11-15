@@ -79,6 +79,7 @@ public class TransientSaveFailureTests : IAsyncLifetime
         services.AddLogging();
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(connectionString));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddOrderPersistence();
         services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
         services.AddScoped<ProcessPaymentHandler>();
         services
