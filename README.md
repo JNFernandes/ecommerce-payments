@@ -89,15 +89,27 @@ that commits first wins and the other sees it
 ([ADR 0004](docs/adr/0004-per-order-serialisation.md)). The lock wait is bounded by
 `Persistence:OrderLockTimeoutMs`.
 
-**Consumer retries:** both consumers share `KafkaConsumerBase`. If handling a message fails
-(e.g. the database is down), the consumer retries the **same** message with exponential
-backoff (`Kafka:ConsumerRetryBaseDelayMs` → `Kafka:ConsumerRetryMaxDelayMs`) and never commits
-past it, so delivery stays at-least-once.
+**Consumer retries and inbound dead letters (US-06):** both consumers share `KafkaConsumerBase`.
+- **Failed handling** (for example, the database is down): the consumer retries the **same**
+  message with exponential backoff (`Kafka:ConsumerRetryBaseDelayMs` →
+  `Kafka:ConsumerRetryMaxDelayMs`) and never commits past it.
+- **Still failing after `Kafka:ConsumerMaxAttempts`** (default 5): the message is stored as
+  received in `consumed_dead_letters` and logged as an Error. Its offset is committed only after
+  that, so the partition moves on.
+- **Malformed message:** stored at once with `Attempts = 1`.
+- **Store fails:** nothing is committed and the message keeps being retried, so delivery stays
+  at-least-once.
+
+How to list and replay stored messages:
+[docs/consumed-dead-letters.md](docs/consumed-dead-letters.md)
+([ADR 0005](docs/adr/0005-inbound-dead-letter.md)).
 
 ### Known limitations
 
-- A message that fails permanently blocks its partition and retries indefinitely; there is no
-  inbound dead-letter store yet (planned follow-up: US-06 inbound dead-letter).
+- Messages in `consumed_dead_letters` are not replayed automatically, and the service never
+  removes them. A parked `OrderCancelled` leaves its payment `Processed` until it is replayed.
+- The consumer keeps its attempt count in memory, so after a restart the count for a failing
+  message starts again.
 - If the process crashes after a refund (or payment) is saved but before its event is published
   or dead-lettered, that event is lost — there is no transactional outbox.
 - Cancellation markers are never expired. Early cancellations that US-04 ignored before US-05
@@ -109,9 +121,9 @@ past it, so delivery stays at-least-once.
 
 | Hosted service | Responsibility | Status |
 |---|---|---|
-| `OrderPlacedConsumer` | Consumes `orders.order-placed` and runs the payment write flow. It skips orders that have a cancellation marker (US-05). | Implemented |
+| `OrderPlacedConsumer` | Consumes `orders.order-placed` and runs the payment write flow. It skips orders that have a cancellation marker (US-05). Messages that are malformed or keep failing go to `consumed_dead_letters` (US-06). | Implemented |
 | `DeadLetterRetryWorker` | Every `DeadLetterRetry:IntervalMs`, republishes due `payment_dead_letters` rows unchanged (same topic, key and `eventId`) with exponential backoff, marking them `Resolved` or `Exhausted` after `MaxRetries`; claims rows with `FOR UPDATE SKIP LOCKED` so several instances are safe. See [docs/dead-letter-retry.md](docs/dead-letter-retry.md) and [ADR 0003](docs/adr/0003-dead-letter-retry.md). | Implemented (US-03) |
-| `OrderCancelledConsumer` | Consumes `orders.order-cancelled`. Refunds the order's `Processed` payment and publishes `PaymentRefunded`, dead-lettering it if the publish fails. Failed, Pending or already Refunded payments are ignored with an Information log. With no payment, it records a cancellation marker (US-05). | Implemented (US-04, US-05) |
+| `OrderCancelledConsumer` | Consumes `orders.order-cancelled`. Refunds the order's `Processed` payment and publishes `PaymentRefunded`, dead-lettering it if the publish fails. Failed, Pending or already Refunded payments are ignored with an Information log. With no payment, it records a cancellation marker (US-05). Messages that are malformed or keep failing go to `consumed_dead_letters` (US-06). | Implemented (US-04, US-05, US-06) |
 
 ## Project layout
 
@@ -130,6 +142,7 @@ tests/
 docs/
   adr/                                Architecture Decision Records
   dead-letter-retry.md                Dead-letter states, settings, example SQL
+  consumed-dead-letters.md            Inbound dead letters: what lands there, listing, replay
 specs/
   NNN-feature-name/                   Spec-Kit artifacts (spec, plan, tasks) per user story
 ```
@@ -213,6 +226,7 @@ dotnet test
 | `Kafka:OrderPlacedTopic` / `Kafka:OrderCancelledTopic` | Inbound topics |
 | `Kafka:PaymentProcessedTopic` / `Kafka:PaymentFailedTopic` / `Kafka:PaymentRefundedTopic` | Outbound topics |
 | `Kafka:ConsumerRetryBaseDelayMs` / `Kafka:ConsumerRetryMaxDelayMs` | Backoff before a consumer re-reads a message whose handling failed (defaults `1000` / `60000`) |
+| `Kafka:ConsumerMaxAttempts` | Failed attempts before an inbound message is stored in `consumed_dead_letters` and committed (default `5`, [ADR 0005](docs/adr/0005-inbound-dead-letter.md)) |
 | `PaymentPolicy:MaxAmountThreshold` | Amount above which a payment fails instead of processing |
 | `Persistence:OrderLockTimeoutMs` | Maximum wait for the per-order lock before the attempt fails and is retried (default `5000`, [ADR 0004](docs/adr/0004-per-order-serialisation.md)) |
 | `DeadLetterRetry:IntervalMs` | Time between dead-letter retry cycles (default `30000`) |

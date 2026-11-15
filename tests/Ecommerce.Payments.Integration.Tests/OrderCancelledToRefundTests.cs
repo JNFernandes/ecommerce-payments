@@ -122,11 +122,13 @@ public class OrderCancelledToRefundTests : IAsyncLifetime
     [Theory]
     [InlineData("not json")]
     [InlineData("""{ "eventId": "6f1d2c3b-1111-4000-8000-000000000001", "version": 1 }""")]
-    public async Task HandleMessageAsync_MalformedMessage_IsCommitted(string rawMessage)
+    public async Task HandleMessageAsync_MalformedMessage_Throws_InvalidMessageException(string rawMessage)
     {
         using var consumer = CreateCancelledConsumer();
 
-        Assert.True(await consumer.HandleMessageAsync(rawMessage, CancellationToken.None));
+        // KafkaConsumerBase stores it in consumed_dead_letters and commits (US-06).
+        await Assert.ThrowsAsync<InvalidMessageException>(
+            () => consumer.HandleMessageAsync(rawMessage, CancellationToken.None));
         Assert.Empty(Publisher.PublishedRefunds);
     }
 

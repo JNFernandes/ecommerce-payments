@@ -41,4 +41,11 @@ public sealed class KafkaOptions
 
     /// <summary>Upper bound, in milliseconds, for the consumer retry wait. Default 60 000.</summary>
     public int ConsumerRetryMaxDelayMs { get; set; } = 60_000;
+
+    /// <summary>
+    /// Failed handling attempts of one message before it is stored in
+    /// <c>consumed_dead_letters</c> and its offset committed (US-06, ADR 0005). Must be positive.
+    /// Default 5 (about 15 s of waits with the default backoff).
+    /// </summary>
+    public int ConsumerMaxAttempts { get; set; } = 5;
 }

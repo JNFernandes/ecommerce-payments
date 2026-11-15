@@ -95,7 +95,8 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
     {
         using var consumer = CreateCancelledConsumer();
 
-        Assert.True(await consumer.HandleMessageAsync("""{ "eventId": "6f1d2c3b-1111-4000-8000-000000000001", "version": 1 }""", CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidMessageException>(() => consumer.HandleMessageAsync(
+            """{ "eventId": "6f1d2c3b-1111-4000-8000-000000000001", "version": 1 }""", CancellationToken.None));
 
         await using var dbContext = CreateDbContext();
         Assert.Equal(0, await dbContext.CancellationMarkers.CountAsync());

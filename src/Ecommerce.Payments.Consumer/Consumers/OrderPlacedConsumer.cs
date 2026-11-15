@@ -27,20 +27,17 @@ public sealed class OrderPlacedConsumer : KafkaConsumerBase
     protected override string Topic => KafkaOptions.OrderPlacedTopic;
 
     /// <summary>
-    /// Validates and dispatches a single raw message to the Service layer. Returns whether the
-    /// Kafka offset should be committed: true when the envelope was rejected or fully processed.
-    /// Throws when a save failure survived the handler's retries, so the base retries the message.
+    /// Validates and dispatches a single raw message to the Service layer. Returns true (commit)
+    /// when it was fully processed. Throws <see cref="InvalidMessageException"/> for a malformed
+    /// envelope (the base stores it in <c>consumed_dead_letters</c> and commits, US-06), and
+    /// rethrows when a save failure survived the handler's retries, so the base retries it.
     /// </summary>
     internal override async Task<bool> HandleMessageAsync(string rawMessage, CancellationToken cancellationToken)
     {
         if (!OrderPlacedEvent.TryParse(rawMessage, out var orderPlaced, out var error))
         {
-            Logger.LogWarning(
-                "Rejecting malformed OrderPlaced message: {Error}. Raw message logged for review.",
-                error);
-            // Malformed envelopes never reach Domain; commit so the poison message is not
-            // redelivered forever (Constitution Principle I / spec Edge Cases).
-            return true;
+            // Malformed envelopes never reach Domain and are never retried.
+            throw new InvalidMessageException(error!);
         }
 
         using var scope = ScopeFactory.CreateScope();

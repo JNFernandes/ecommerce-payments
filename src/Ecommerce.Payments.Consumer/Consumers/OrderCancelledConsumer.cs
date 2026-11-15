@@ -27,19 +27,17 @@ public sealed class OrderCancelledConsumer : KafkaConsumerBase
 
     /// <summary>
     /// Validates and dispatches one raw <c>OrderCancelled</c> message. Returns true (commit) when
-    /// the envelope was rejected or the cancellation was fully handled — including when no refund
-    /// was needed. Throws when the database stayed unavailable, so the base retries the message.
+    /// the cancellation was fully handled — including when no refund was needed. Throws
+    /// <see cref="InvalidMessageException"/> for a malformed envelope (stored in
+    /// <c>consumed_dead_letters</c> and committed by the base, US-06), and rethrows when the
+    /// database stayed unavailable, so the base retries the message.
     /// </summary>
     internal override async Task<bool> HandleMessageAsync(string rawMessage, CancellationToken cancellationToken)
     {
         if (!OrderCancelledEvent.TryParse(rawMessage, out var orderCancelled, out var error))
         {
-            Logger.LogWarning(
-                "Rejecting malformed OrderCancelled message: {Error}. Raw message logged for review.",
-                error);
-            // Malformed envelopes never reach Domain; commit so the poison message is not
-            // redelivered forever.
-            return true;
+            // Malformed envelopes never reach Domain and are never retried.
+            throw new InvalidMessageException(error!);
         }
 
         using var scope = ScopeFactory.CreateScope();
