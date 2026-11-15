@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Infrastructure.Persistence.Entities;
@@ -12,11 +12,11 @@ using Testcontainers.PostgreSql;
 namespace Ecommerce.Payments.Integration.Tests;
 
 /// <summary>
-/// Verifies <see cref="PaymentDeadLetterRepository.ClaimDueAsync"/> against a real PostgreSQL
+/// Verifies <see cref="PaymentOutboxRepository.ClaimDueAsync"/> against a real PostgreSQL
 /// container: due-row selection, ordering, the transaction requirement and
 /// <c>FOR UPDATE SKIP LOCKED</c> behaviour across concurrent claimers (US-03, ADR 0003).
 /// </summary>
-public class DeadLetterClaimTests : IAsyncLifetime
+public class OutboxClaimTests : IAsyncLifetime
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 12, 10, 0, 0, TimeSpan.Zero);
 
@@ -32,7 +32,7 @@ public class DeadLetterClaimTests : IAsyncLifetime
     public async Task DisposeAsync() => await _postgres.DisposeAsync();
 
     [Fact]
-    public async Task Should_Claim_Due_PendingRetry_Row()
+    public async Task Should_Claim_Due_Pending_Row()
     {
         var due = await InsertAsync(Now.AddSeconds(-1));
 
@@ -54,8 +54,8 @@ public class DeadLetterClaimTests : IAsyncLifetime
     [Fact]
     public async Task Should_Not_Claim_Resolved_Or_Exhausted_Rows()
     {
-        await InsertAsync(Now.AddMinutes(-1), DeadLetterStatus.Resolved);
-        await InsertAsync(Now.AddMinutes(-1), DeadLetterStatus.Exhausted);
+        await InsertAsync(Now.AddMinutes(-1), OutboxStatus.Published);
+        await InsertAsync(Now.AddMinutes(-1), OutboxStatus.Exhausted);
 
         var claimed = await ClaimInNewTransactionAsync(limit: 10);
 
@@ -79,7 +79,7 @@ public class DeadLetterClaimTests : IAsyncLifetime
     public async Task Should_Throw_When_Claiming_Outside_A_Transaction()
     {
         await using var dbContext = CreateDbContext();
-        var repository = new PaymentDeadLetterRepository(dbContext);
+        var repository = new PaymentOutboxRepository(dbContext);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => repository.ClaimDueAsync(Now, 1, CancellationToken.None));
@@ -95,8 +95,8 @@ public class DeadLetterClaimTests : IAsyncLifetime
 
         await using var contextA = CreateDbContext();
         await using var contextB = CreateDbContext();
-        var repositoryA = new PaymentDeadLetterRepository(contextA);
-        var repositoryB = new PaymentDeadLetterRepository(contextB);
+        var repositoryA = new PaymentOutboxRepository(contextA);
+        var repositoryB = new PaymentOutboxRepository(contextB);
         await using var transactionA = await repositoryA.BeginTransactionAsync(CancellationToken.None);
         await using var transactionB = await repositoryB.BeginTransactionAsync(CancellationToken.None);
 
@@ -116,12 +116,12 @@ public class DeadLetterClaimTests : IAsyncLifetime
         await InsertAsync(Now.AddSeconds(-1));
 
         await using var contextA = CreateDbContext();
-        var repositoryA = new PaymentDeadLetterRepository(contextA);
+        var repositoryA = new PaymentOutboxRepository(contextA);
         await using var transactionA = await repositoryA.BeginTransactionAsync(CancellationToken.None);
         Assert.Single(await repositoryA.ClaimDueAsync(Now, 1, CancellationToken.None));
 
         await using var contextB = CreateDbContext();
-        var repositoryB = new PaymentDeadLetterRepository(contextB);
+        var repositoryB = new PaymentOutboxRepository(contextB);
         await using var transactionB = await repositoryB.BeginTransactionAsync(CancellationToken.None);
         // If SKIP LOCKED were missing, this claim would block and then fail with a lock timeout.
         await contextB.Database.ExecuteSqlRawAsync("SET LOCAL lock_timeout = '1s'");
@@ -141,7 +141,7 @@ public class DeadLetterClaimTests : IAsyncLifetime
 
         await using (var contextA = CreateDbContext())
         {
-            var repositoryA = new PaymentDeadLetterRepository(contextA);
+            var repositoryA = new PaymentOutboxRepository(contextA);
             await using var transactionA = await repositoryA.BeginTransactionAsync(CancellationToken.None);
             Assert.Single(await repositoryA.ClaimDueAsync(Now, 1, CancellationToken.None));
             await transactionA.RollbackAsync();
@@ -155,7 +155,7 @@ public class DeadLetterClaimTests : IAsyncLifetime
     [Fact]
     public async Task Two_Processors_In_Parallel_Publish_Each_Row_Exactly_Once()
     {
-        var rows = new List<PaymentDeadLetterEntity>();
+        var rows = new List<OutboxEntryEntity>();
         for (var i = 0; i < 10; i++)
         {
             rows.Add(await InsertAsync(Now.AddSeconds(-i - 1)));
@@ -175,16 +175,16 @@ public class DeadLetterClaimTests : IAsyncLifetime
 
         await using var readContext = CreateDbContext();
         Assert.All(
-            await readContext.PaymentDeadLetters.AsNoTracking().ToListAsync(),
-            row => Assert.Equal(DeadLetterStatus.Resolved, row.Status));
+            await readContext.PaymentOutbox.AsNoTracking().ToListAsync(),
+            row => Assert.Equal(OutboxStatus.Published, row.Status));
     }
 
-    private static DeadLetterRetryProcessor CreateProcessor(PaymentsDbContext dbContext, IRawEventPublisher publisher) => new(
-        new PaymentDeadLetterRepository(dbContext),
+    private static OutboxRelayProcessor CreateProcessor(PaymentsDbContext dbContext, IRawEventPublisher publisher) => new(
+        new PaymentOutboxRepository(dbContext),
         publisher,
-        Options.Create(new DeadLetterRetryOptions()),
+        Options.Create(new OutboxRelayOptions()),
         new FakeTimeProvider(Now),
-        NullLogger<DeadLetterRetryProcessor>.Instance);
+        NullLogger<OutboxRelayProcessor>.Instance);
 
     /// <summary>Records every publish; the delay widens the window in which both processors overlap.</summary>
     private sealed class RecordingSlowPublisher(TimeSpan delay) : IRawEventPublisher
@@ -200,37 +200,38 @@ public class DeadLetterClaimTests : IAsyncLifetime
         }
     }
 
-    private async Task<IReadOnlyList<PaymentDeadLetterEntity>> ClaimInNewTransactionAsync(int limit)
+    private async Task<IReadOnlyList<OutboxEntryEntity>> ClaimInNewTransactionAsync(int limit)
     {
         await using var dbContext = CreateDbContext();
-        var repository = new PaymentDeadLetterRepository(dbContext);
+        var repository = new PaymentOutboxRepository(dbContext);
         await using var transaction = await repository.BeginTransactionAsync(CancellationToken.None);
         var claimed = await repository.ClaimDueAsync(Now, limit, CancellationToken.None);
         await transaction.RollbackAsync();
         return claimed;
     }
 
-    internal async Task<PaymentDeadLetterEntity> InsertAsync(
+    internal async Task<OutboxEntryEntity> InsertAsync(
         DateTimeOffset nextRetryAt,
-        DeadLetterStatus status = DeadLetterStatus.PendingRetry)
+        OutboxStatus status = OutboxStatus.Pending)
     {
         var paymentId = Guid.NewGuid();
-        var row = new PaymentDeadLetterEntity
+        var eventId = Guid.NewGuid();
+        var row = new OutboxEntryEntity
         {
             Id = Guid.NewGuid(),
             PaymentId = paymentId,
             EventType = "PaymentProcessedEvent",
-            Payload = $$"""{"eventId":"{{Guid.NewGuid()}}"}""",
+            Payload = $$"""{"eventId":"{{eventId}}"}""",
             Topic = "payments.payment-processed",
             MessageKey = paymentId.ToString(),
-            FailureReason = "Local: Message timed out",
-            CreatedAt = Now.AddMinutes(-5),
+            EventId = eventId,
+            RecordedAt = Now.AddMinutes(-5),
             Status = status,
-            NextRetryAt = nextRetryAt
+            NextAttemptAt = nextRetryAt
         };
 
         await using var dbContext = CreateDbContext();
-        await new PaymentDeadLetterRepository(dbContext).AddAsync(row, CancellationToken.None);
+        await new PaymentOutboxRepository(dbContext).AddAsync(row, CancellationToken.None);
         return row;
     }
 

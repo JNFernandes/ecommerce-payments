@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Ecommerce.Payments.Consumer.Consumers;
-using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Infrastructure.Persistence.Entities;
@@ -54,7 +54,7 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         await using (var brokerUp = BuildServiceProvider(_kafka.GetBootstrapAddress(), TimeProvider.System))
         {
             await using var scope = brokerUp.CreateAsyncScope();
-            var processor = scope.ServiceProvider.GetRequiredService<IDeadLetterRetryProcessor>();
+            var processor = scope.ServiceProvider.GetRequiredService<IOutboxRelayProcessor>();
 
             var attempted = await processor.RunCycleAsync(CancellationToken.None);
 
@@ -69,8 +69,8 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         Assert.Equal(orderId, JsonDocument.Parse(published.Message.Value).RootElement.GetProperty("orderId").GetGuid());
 
         var row = await LoadAsync(deadLetter.Id);
-        Assert.Equal(DeadLetterStatus.Resolved, row.Status);
-        Assert.NotNull(row.ResolvedAt);
+        Assert.Equal(OutboxStatus.Published, row.Status);
+        Assert.NotNull(row.PublishedAt);
         Assert.Equal(0, row.RetryCount);
         Assert.Equal(deadLetter.Payload, row.Payload);
     }
@@ -80,7 +80,7 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
     {
         var deadLetter = await DeadLetterViaFailedPublishAsync(Guid.NewGuid());
         // Whole seconds (PostgreSQL stores microseconds, .NET ticks are 100 ns) and after the row's
-        // NextRetryAt, so the row is due on the first cycle.
+        // NextAttemptAt, so the row is due on the first cycle.
         var startAt = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 1);
         var clock = new FakeTimeProvider(startAt);
 
@@ -92,9 +92,9 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         // Cycle 1: the retry itself fails → bookkeeping on the same row, 5 s backoff.
         Assert.Equal(1, await RunCycleAsync(provider));
         var afterFailure = await LoadAsync(deadLetter.Id);
-        Assert.Equal(DeadLetterStatus.PendingRetry, afterFailure.Status);
+        Assert.Equal(OutboxStatus.Pending, afterFailure.Status);
         Assert.Equal(1, afterFailure.RetryCount);
-        Assert.Equal(clock.GetUtcNow().AddSeconds(5), afterFailure.NextRetryAt);
+        Assert.Equal(clock.GetUtcNow().AddSeconds(5), afterFailure.NextAttemptAt);
         Assert.False(string.IsNullOrEmpty(afterFailure.LastError));
         Assert.Equal(1, await CountDeadLettersAsync());
 
@@ -107,8 +107,8 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         Assert.Equal(1, await RunCycleAsync(provider));
 
         var resolved = await LoadAsync(deadLetter.Id);
-        Assert.Equal(DeadLetterStatus.Resolved, resolved.Status);
-        Assert.Equal(clock.GetUtcNow(), resolved.ResolvedAt);
+        Assert.Equal(OutboxStatus.Published, resolved.Status);
+        Assert.Equal(clock.GetUtcNow(), resolved.PublishedAt);
         Assert.Equal(1, resolved.RetryCount);
 
         var published = KafkaTestConsumer.SubscribeAndConsume<string>(
@@ -121,7 +121,7 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
     private static async Task<int> RunCycleAsync(ServiceProvider provider)
     {
         await using var scope = provider.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<IDeadLetterRetryProcessor>()
+        return await scope.ServiceProvider.GetRequiredService<IOutboxRelayProcessor>()
             .RunCycleAsync(CancellationToken.None);
     }
 
@@ -129,7 +129,7 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
     {
         await using var dbContext = new PaymentsDbContext(
             new DbContextOptionsBuilder<PaymentsDbContext>().UseNpgsql(_postgres.GetConnectionString()).Options);
-        return await dbContext.PaymentDeadLetters.CountAsync();
+        return await dbContext.PaymentOutbox.CountAsync();
     }
 
     /// <summary>Fault injection: throws for the first <c>failures</c> publishes, then delegates.</summary>
@@ -147,7 +147,7 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
     /// Runs the real Consumer → Service → Repository → Publisher flow with the publisher pointed at
     /// an unreachable broker, so the publish fails for real and the event is dead-lettered.
     /// </summary>
-    private async Task<PaymentDeadLetterEntity> DeadLetterViaFailedPublishAsync(Guid orderId)
+    private async Task<OutboxEntryEntity> DeadLetterViaFailedPublishAsync(Guid orderId)
     {
         await using var brokerDown = BuildServiceProvider(UnreachableBroker, TimeProvider.System);
         using var consumer = new OrderPlacedConsumer(
@@ -160,14 +160,14 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         await using var scope = brokerDown.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
         var paymentId = (await dbContext.Payments.SingleAsync(p => p.OrderId == orderId)).Id;
-        return await dbContext.PaymentDeadLetters.AsNoTracking().SingleAsync(d => d.PaymentId == paymentId);
+        return await dbContext.PaymentOutbox.AsNoTracking().SingleAsync(d => d.PaymentId == paymentId);
     }
 
     internal ServiceProvider BuildServiceProvider(
         string bootstrapServers,
         TimeProvider timeProvider,
         Func<IServiceProvider, IRawEventPublisher>? rawPublisher = null,
-        Action<DeadLetterRetryOptions>? configureRetry = null)
+        Action<OutboxRelayOptions>? configureRetry = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -175,12 +175,12 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+        services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<PaymentEventPublisher>();
         services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddSingleton(rawPublisher ?? (sp => sp.GetRequiredService<PaymentEventPublisher>()));
         services.AddScoped<ProcessPaymentHandler>();
-        services.AddScoped<IDeadLetterRetryProcessor, DeadLetterRetryProcessor>();
+        services.AddScoped<IOutboxRelayProcessor, OutboxRelayProcessor>();
         services
             .AddOptions<KafkaOptions>()
             .Configure(o =>
@@ -190,16 +190,16 @@ public class DeadLetterRetryFlowTests : IAsyncLifetime
                 o.OrderPlacedTopic = "orders.order-placed";
                 o.PaymentProcessedTopic = PaymentProcessedTopic;
             });
-        services.AddOptions<DeadLetterRetryOptions>().Configure(o => configureRetry?.Invoke(o));
+        services.AddOptions<OutboxRelayOptions>().Configure(o => configureRetry?.Invoke(o));
 
         return services.BuildServiceProvider();
     }
 
-    private async Task<PaymentDeadLetterEntity> LoadAsync(Guid id)
+    private async Task<OutboxEntryEntity> LoadAsync(Guid id)
     {
         await using var dbContext = new PaymentsDbContext(
             new DbContextOptionsBuilder<PaymentsDbContext>().UseNpgsql(_postgres.GetConnectionString()).Options);
-        return await dbContext.PaymentDeadLetters.AsNoTracking().SingleAsync(d => d.Id == id);
+        return await dbContext.PaymentOutbox.AsNoTracking().SingleAsync(d => d.Id == id);
     }
 
     private static Guid EventIdOf(string json) =>

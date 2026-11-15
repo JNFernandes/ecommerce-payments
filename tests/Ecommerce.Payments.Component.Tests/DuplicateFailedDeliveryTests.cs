@@ -75,7 +75,7 @@ public class DuplicateFailedDeliveryTests : IAsyncLifetime
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
         services.AddSingleton(TimeProvider.System);
-        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+        services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<IPaymentEventPublisher, PaymentEventPublisher>();
         services.AddScoped<ProcessPaymentHandler>();
         services

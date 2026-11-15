@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace Ecommerce.Payments.Infrastructure.Tests.DeadLetters;
+namespace Ecommerce.Payments.Infrastructure.Tests.Outbox;
 
 /// <summary>Captures log entries (level + rendered message) for assertions.</summary>
 internal sealed class ListLogger<T> : ILogger<T>

@@ -76,6 +76,7 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
             paymentProcessed.PaymentId,
             paymentProcessed.OrderId,
             nameof(PaymentProcessedEvent),
+            integrationEvent.EventId,
             JsonSerializer.Serialize(integrationEvent),
             cancellationToken);
     }
@@ -99,6 +100,7 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
             paymentFailed.PaymentId,
             paymentFailed.OrderId,
             nameof(PaymentFailedEvent),
+            integrationEvent.EventId,
             JsonSerializer.Serialize(integrationEvent),
             cancellationToken);
     }
@@ -123,6 +125,7 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
             paymentRefunded.PaymentId,
             paymentRefunded.OrderId,
             nameof(PaymentRefundedEvent),
+            integrationEvent.EventId,
             JsonSerializer.Serialize(integrationEvent),
             cancellationToken);
     }
@@ -139,6 +142,7 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
         Guid paymentId,
         Guid orderId,
         string eventType,
+        Guid eventId,
         string payload,
         CancellationToken cancellationToken)
     {
@@ -159,7 +163,7 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
                 orderId,
                 topic);
 
-            await WriteDeadLetterAsync(paymentId, eventType, topic, key, payload, ex, cancellationToken);
+            await WriteDeadLetterAsync(paymentId, eventType, topic, key, eventId, payload, ex, cancellationToken);
         }
     }
 
@@ -168,6 +172,7 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
         string eventType,
         string topic,
         string key,
+        Guid eventId,
         string payload,
         Exception failure,
         CancellationToken cancellationToken)
@@ -175,10 +180,10 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
         var now = _timeProvider.GetUtcNow();
 
         using var scope = _scopeFactory.CreateScope();
-        var repository = scope.ServiceProvider.GetRequiredService<IPaymentDeadLetterRepository>();
+        var repository = scope.ServiceProvider.GetRequiredService<IPaymentOutboxRepository>();
 
         await repository.AddAsync(
-            new PaymentDeadLetterEntity
+            new OutboxEntryEntity
             {
                 Id = Guid.NewGuid(),
                 PaymentId = paymentId,
@@ -186,11 +191,12 @@ public sealed class PaymentEventPublisher : IPaymentEventPublisher, IRawEventPub
                 Payload = payload,
                 Topic = topic,
                 MessageKey = key,
-                FailureReason = failure.Message,
-                CreatedAt = now,
-                Status = DeadLetterStatus.PendingRetry,
+                EventId = eventId,
+                LastError = failure.Message,
+                RecordedAt = now,
+                Status = OutboxStatus.Pending,
                 RetryCount = 0,
-                NextRetryAt = now
+                NextAttemptAt = now
             },
             cancellationToken);
     }

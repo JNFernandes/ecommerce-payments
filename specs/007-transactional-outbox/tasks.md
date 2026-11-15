@@ -44,7 +44,7 @@ must stay green.
 
 **⚠️ CRITICAL**: no user story work can begin until this phase is complete.
 
-- [ ] T001 Rename the entity and status types.
+- [X] T001 Rename the entity and status types.
   - `git mv` `src/Ecommerce.Payments.Infrastructure/Persistence/Entities/PaymentDeadLetterEntity.cs` → `OutboxEntryEntity.cs` (class `OutboxEntryEntity`).
   - `git mv` `DeadLetterStatus.cs` → `OutboxStatus.cs`, with members `Pending`, `Published` and `Exhausted`.
   - Update the properties per data-model.md:
@@ -58,7 +58,7 @@ must stay green.
     - add a unique index on `EventId` named `IX_payment_outbox_event_id`;
     - add the index `IX_payment_outbox_payment_sequence` on (`PaymentId`, `Sequence`);
     - add the partial index `IX_payment_outbox_due` on `NextAttemptAt`, filtered on `"Status" = 'Pending'`.
-- [ ] T002 Generate the migration `TurnDeadLettersIntoOutbox` with `dotnet ef migrations add TurnDeadLettersIntoOutbox --project src/Ecommerce.Payments.Infrastructure --startup-project src/Ecommerce.Payments.Infrastructure --output-dir Persistence/Migrations`. Depends on T001.
+- [X] T002 Generate the migration `TurnDeadLettersIntoOutbox` with `dotnet ef migrations add TurnDeadLettersIntoOutbox --project src/Ecommerce.Payments.Infrastructure --startup-project src/Ecommerce.Payments.Infrastructure --output-dir Persistence/Migrations`. Depends on T001.
   - **Replace the generated drop and create with hand-written `Up` steps**, in this order (research R1):
     1. `RenameTable`.
     2. `RenameColumn` ×3.
@@ -71,7 +71,7 @@ must stay green.
   - Write a `Down` that reverses every step.
   - Run `dotnet format`.
   - Keep the model snapshot consistent with T001: `dotnet ef migrations has-pending-model-changes` must report none.
-- [ ] T003 Rename the repository and the relay components; behaviour stays the same.
+- [X] T003 Rename the repository and the relay components; behaviour stays the same.
   - **Repository**:
     - `git mv` `src/Ecommerce.Payments.Infrastructure/Persistence/IPaymentDeadLetterRepository.cs` → `IPaymentOutboxRepository.cs`, and `PaymentDeadLetterRepository.cs` → `PaymentOutboxRepository.cs`.
     - The claim SQL uses the new table, column and status names.
@@ -96,7 +96,7 @@ must stay green.
   - In `src/Ecommerce.Payments.Infrastructure/Messaging/PaymentEventPublisher.cs`, `WriteDeadLetterAsync` writes an `OutboxEntryEntity` with `EventId`, taken from the integration event, and `RecordedAt`.
   - In `src/Ecommerce.Payments.Consumer/Program.cs`, update the DI and options binding. In `appsettings.json`, rename the `DeadLetterRetry` section to `OutboxRelay` and `IntervalMs` to `PollIntervalMs`.
   - Depends on T001.
-- [ ] T004 Rename and update the tests.
+- [X] T004 Rename and update the tests.
   - `git mv` `tests/Ecommerce.Payments.Infrastructure.Tests/DeadLetters/` → `Outbox/`, renaming the classes to `OutboxRetryPolicyTests`, `OutboxRelayProcessorTests`, `OutboxRelayWorkerTests` and `OutboxRows`. The assertions stay the same, using the new names and statuses.
   - `git mv` `tests/Ecommerce.Payments.Integration.Tests/DeadLetterClaimTests.cs` → `OutboxClaimTests.cs`, on the new table.
   - Rewrite `tests/Ecommerce.Payments.Integration.Tests/DeadLetterMigrationTests.cs` as `OutboxMigrationTests.cs` **(rename)**:

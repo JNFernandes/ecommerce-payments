@@ -5,25 +5,25 @@ using Microsoft.EntityFrameworkCore.Storage;
 namespace Ecommerce.Payments.Infrastructure.Persistence;
 
 /// <summary>
-/// EF Core / PostgreSQL implementation of <see cref="IPaymentDeadLetterRepository"/>.
+/// EF Core / PostgreSQL implementation of <see cref="IPaymentOutboxRepository"/>.
 /// Multi-instance safety comes from <see cref="ClaimDueAsync"/>'s
 /// <c>FOR UPDATE SKIP LOCKED</c>: each row is locked by exactly one open transaction at a time,
-/// and other claimers skip it instead of waiting (ADR 0003).
+/// and other claimers skip it instead of waiting (ADR 0003, ADR 0006).
 /// </summary>
-public sealed class PaymentDeadLetterRepository : IPaymentDeadLetterRepository
+public sealed class PaymentOutboxRepository : IPaymentOutboxRepository
 {
     private readonly PaymentsDbContext _dbContext;
 
     /// <summary>Creates the repository over a scoped <see cref="PaymentsDbContext"/>.</summary>
-    public PaymentDeadLetterRepository(PaymentsDbContext dbContext)
+    public PaymentOutboxRepository(PaymentsDbContext dbContext)
     {
         _dbContext = dbContext;
     }
 
     /// <inheritdoc />
-    public async Task AddAsync(PaymentDeadLetterEntity deadLetter, CancellationToken cancellationToken)
+    public async Task AddAsync(OutboxEntryEntity entry, CancellationToken cancellationToken)
     {
-        _dbContext.PaymentDeadLetters.Add(deadLetter);
+        _dbContext.PaymentOutbox.Add(entry);
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
@@ -32,7 +32,7 @@ public sealed class PaymentDeadLetterRepository : IPaymentDeadLetterRepository
         _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<PaymentDeadLetterEntity>> ClaimDueAsync(
+    public async Task<IReadOnlyList<OutboxEntryEntity>> ClaimDueAsync(
         DateTimeOffset now,
         int limit,
         CancellationToken cancellationToken)
@@ -43,13 +43,13 @@ public sealed class PaymentDeadLetterRepository : IPaymentDeadLetterRepository
                 "ClaimDueAsync must run inside a transaction; otherwise the row locks are released immediately.");
         }
 
-        var pendingRetry = nameof(DeadLetterStatus.PendingRetry);
+        var pending = nameof(OutboxStatus.Pending);
 
-        return await _dbContext.PaymentDeadLetters
+        return await _dbContext.PaymentOutbox
             .FromSql($"""
-                SELECT * FROM payment_dead_letters
-                WHERE "Status" = {pendingRetry} AND "NextRetryAt" <= {now}
-                ORDER BY "NextRetryAt"
+                SELECT * FROM payment_outbox
+                WHERE "Status" = {pending} AND "NextAttemptAt" <= {now}
+                ORDER BY "NextAttemptAt"
                 LIMIT {limit}
                 FOR UPDATE SKIP LOCKED
                 """)

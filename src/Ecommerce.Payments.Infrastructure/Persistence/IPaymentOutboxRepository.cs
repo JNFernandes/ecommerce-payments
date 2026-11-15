@@ -4,16 +4,15 @@ using Microsoft.EntityFrameworkCore.Storage;
 namespace Ecommerce.Payments.Infrastructure.Persistence;
 
 /// <summary>
-/// Persistence for the <c>payment_dead_letters</c> table: written by the publisher when a
-/// publish fails after a successful save, and read/updated by the dead-letter retry worker
-/// (US-03, ADR 0003). The single owner of that table.
+/// Relay-side persistence for the <c>payment_outbox</c> table (US-07, ADR 0006): claiming due
+/// entries and saving their delivery bookkeeping.
 /// </summary>
-public interface IPaymentDeadLetterRepository
+public interface IPaymentOutboxRepository
 {
-    /// <summary>Inserts a new dead-letter row and saves it immediately.</summary>
-    /// <param name="deadLetter">The row to insert, with its retry bookkeeping initialised.</param>
+    /// <summary>Inserts a new entry and saves it immediately.</summary>
+    /// <param name="entry">The entry to insert, with its bookkeeping initialised.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public Task AddAsync(PaymentDeadLetterEntity deadLetter, CancellationToken cancellationToken);
+    public Task AddAsync(OutboxEntryEntity entry, CancellationToken cancellationToken);
 
     /// <summary>
     /// Starts a database transaction on the repository's context. Claimed rows stay locked
@@ -24,8 +23,8 @@ public interface IPaymentDeadLetterRepository
     public Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Claims up to <paramref name="limit"/> rows that are <see cref="DeadLetterStatus.PendingRetry"/>
-    /// and due (<c>NextRetryAt &lt;= now</c>), oldest due first, with
+    /// Claims up to <paramref name="limit"/> rows that are <see cref="OutboxStatus.Pending"/>
+    /// and due (<c>NextAttemptAt &lt;= now</c>), oldest due first, with
     /// <c>SELECT ... FOR UPDATE SKIP LOCKED</c>: rows locked by another transaction (another
     /// worker or instance) are skipped without waiting, so no row is processed twice
     /// concurrently. MUST be called inside a transaction from <see cref="BeginTransactionAsync"/>.
@@ -35,7 +34,7 @@ public interface IPaymentDeadLetterRepository
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The claimed rows, tracked by the context so changes are saved by <see cref="SaveChangesAsync"/>.</returns>
     /// <exception cref="InvalidOperationException">No transaction is open.</exception>
-    public Task<IReadOnlyList<PaymentDeadLetterEntity>> ClaimDueAsync(
+    public Task<IReadOnlyList<OutboxEntryEntity>> ClaimDueAsync(
         DateTimeOffset now,
         int limit,
         CancellationToken cancellationToken);

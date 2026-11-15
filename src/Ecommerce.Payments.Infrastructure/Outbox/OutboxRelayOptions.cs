@@ -1,16 +1,16 @@
-namespace Ecommerce.Payments.Infrastructure.DeadLetters;
+namespace Ecommerce.Payments.Infrastructure.Outbox;
 
 /// <summary>
 /// Settings for the dead-letter retry worker, bound from the <c>DeadLetterRetry</c>
 /// configuration section (see <c>docs/dead-letter-retry.md</c>).
 /// </summary>
-public sealed class DeadLetterRetryOptions
+public sealed class OutboxRelayOptions
 {
     /// <summary>Configuration section name.</summary>
-    public const string SectionName = "DeadLetterRetry";
+    public const string SectionName = "OutboxRelay";
 
     /// <summary>Time between retry cycles, in milliseconds. Default 30 000.</summary>
-    public int IntervalMs { get; set; } = 30_000;
+    public int PollIntervalMs { get; set; } = 30_000;
 
     /// <summary>Maximum number of rows processed per cycle. Default 20.</summary>
     public int BatchSize { get; set; } = 20;
@@ -29,5 +29,5 @@ public sealed class DeadLetterRetryOptions
     /// <see cref="MaxDelayMs"/> is at least <see cref="BaseDelayMs"/>.
     /// </summary>
     public bool IsValid() =>
-        IntervalMs > 0 && BatchSize > 0 && BaseDelayMs > 0 && MaxRetries > 0 && MaxDelayMs >= BaseDelayMs;
+        PollIntervalMs > 0 && BatchSize > 0 && BaseDelayMs > 0 && MaxRetries > 0 && MaxDelayMs >= BaseDelayMs;
 }

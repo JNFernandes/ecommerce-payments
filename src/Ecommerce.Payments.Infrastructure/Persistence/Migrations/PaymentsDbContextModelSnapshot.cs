@@ -89,20 +89,16 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Ecommerce.Payments.Infrastructure.Persistence.Entities.PaymentDeadLetterEntity", b =>
+            modelBuilder.Entity("Ecommerce.Payments.Infrastructure.Persistence.Entities.OutboxEntryEntity", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("EventType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("FailureReason")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -116,7 +112,7 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<DateTimeOffset?>("NextRetryAt")
+                    b.Property<DateTimeOffset>("NextAttemptAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Payload")
@@ -126,11 +122,20 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("PaymentId")
                         .HasColumnType("uuid");
 
-                    b.Property<DateTimeOffset?>("ResolvedAt")
+                    b.Property<DateTimeOffset?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("RetryCount")
                         .HasColumnType("integer");
+
+                    b.Property<long>("Sequence")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Sequence"));
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -143,11 +148,22 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("NextRetryAt")
-                        .HasDatabaseName("IX_payment_dead_letters_due")
-                        .HasFilter("\"Status\" = 'PendingRetry'");
+                    b.HasIndex("EventId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_payment_outbox_event_id");
 
-                    b.ToTable("payment_dead_letters", (string)null);
+                    b.HasIndex("NextAttemptAt")
+                        .HasDatabaseName("IX_payment_outbox_due")
+                        .HasFilter("\"Status\" = 'Pending'");
+
+                    b.HasIndex("Sequence")
+                        .IsUnique()
+                        .HasDatabaseName("IX_payment_outbox_sequence");
+
+                    b.HasIndex("PaymentId", "Sequence")
+                        .HasDatabaseName("IX_payment_outbox_payment_sequence");
+
+                    b.ToTable("payment_outbox", (string)null);
                 });
 
             modelBuilder.Entity("Ecommerce.Payments.Infrastructure.Persistence.Entities.PaymentEntity", b =>

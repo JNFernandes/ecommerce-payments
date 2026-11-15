@@ -53,18 +53,17 @@ public class PublishFailureDeadLetterTests : IAsyncLifetime
         var payment = await dbContext.Payments.SingleAsync(p => p.OrderId == orderId);
         Assert.Equal(PaymentStatus.Processed, payment.Status);
 
-        var deadLetter = await dbContext.PaymentDeadLetters.SingleAsync(d => d.PaymentId == payment.Id);
+        var deadLetter = await dbContext.PaymentOutbox.SingleAsync(d => d.PaymentId == payment.Id);
         Assert.Equal(nameof(Ecommerce.Payments.Infrastructure.Messaging.IntegrationEvents.PaymentProcessedEvent), deadLetter.EventType);
         Assert.Contains(orderId.ToString(), deadLetter.Payload, StringComparison.Ordinal);
-        Assert.False(string.IsNullOrWhiteSpace(deadLetter.FailureReason));
+        Assert.False(string.IsNullOrWhiteSpace(deadLetter.LastError));
 
         // US-03: new dead letters are created ready for the retry worker.
-        Assert.Equal(DeadLetterStatus.PendingRetry, deadLetter.Status);
+        Assert.Equal(OutboxStatus.Pending, deadLetter.Status);
         Assert.Equal(0, deadLetter.RetryCount);
         Assert.Equal("payments.payment-processed", deadLetter.Topic);
         Assert.Equal(payment.Id.ToString(), deadLetter.MessageKey);
-        Assert.NotNull(deadLetter.NextRetryAt);
-        Assert.Null(deadLetter.ResolvedAt);
+        Assert.Null(deadLetter.PublishedAt);
     }
 
     private ServiceProvider BuildServiceProvider()
@@ -90,7 +89,7 @@ public class PublishFailureDeadLetterTests : IAsyncLifetime
                 o.PaymentProcessedTopic = "payments.payment-processed";
             });
         services.AddSingleton(TimeProvider.System);
-        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+        services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<IPaymentEventPublisher, PaymentEventPublisher>();
 
         return services.BuildServiceProvider();

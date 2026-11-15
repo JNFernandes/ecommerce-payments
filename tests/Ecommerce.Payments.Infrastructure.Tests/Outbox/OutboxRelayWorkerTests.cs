@@ -1,23 +1,23 @@
-using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using Moq;
 
-namespace Ecommerce.Payments.Infrastructure.Tests.DeadLetters;
+namespace Ecommerce.Payments.Infrastructure.Tests.Outbox;
 
-public sealed class DeadLetterRetryWorkerTests : IDisposable
+public sealed class OutboxRelayWorkerTests : IDisposable
 {
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(5);
 
     private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 11, 12, 10, 0, 0, TimeSpan.Zero));
-    private readonly Mock<IDeadLetterRetryProcessor> _processor = new();
-    private readonly DeadLetterRetryOptions _options = new() { IntervalMs = 30_000 };
+    private readonly Mock<IOutboxRelayProcessor> _processor = new();
+    private readonly OutboxRelayOptions _options = new() { PollIntervalMs = 30_000 };
     private readonly ServiceProvider _services;
     private int _cycles;
 
-    public DeadLetterRetryWorkerTests()
+    public OutboxRelayWorkerTests()
     {
         _services = new ServiceCollection()
             .AddScoped(_ => _processor.Object)
@@ -49,7 +49,7 @@ public sealed class DeadLetterRetryWorkerTests : IDisposable
         await worker.StartAsync(CancellationToken.None);
         await WaitForCyclesAsync(1);
 
-        _clock.Advance(TimeSpan.FromMilliseconds(_options.IntervalMs - 1));
+        _clock.Advance(TimeSpan.FromMilliseconds(_options.PollIntervalMs - 1));
         await Task.Delay(100);
         Assert.Equal(1, Volatile.Read(ref _cycles));
 
@@ -71,7 +71,7 @@ public sealed class DeadLetterRetryWorkerTests : IDisposable
 
         await worker.StartAsync(CancellationToken.None);
         await WaitForCyclesAsync(1);
-        _clock.Advance(TimeSpan.FromMilliseconds(_options.IntervalMs));
+        _clock.Advance(TimeSpan.FromMilliseconds(_options.PollIntervalMs));
         await WaitForCyclesAsync(2);
 
         Assert.False(worker.ExecuteTask!.IsFaulted);
@@ -108,9 +108,9 @@ public sealed class DeadLetterRetryWorkerTests : IDisposable
         }
     }
 
-    private DeadLetterRetryWorker CreateWorker() => new(
+    private OutboxRelayWorker CreateWorker() => new(
         _services.GetRequiredService<IServiceScopeFactory>(),
         Options.Create(_options),
         _clock,
-        NullLogger<DeadLetterRetryWorker>.Instance);
+        NullLogger<OutboxRelayWorker>.Instance);
 }

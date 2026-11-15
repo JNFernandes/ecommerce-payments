@@ -1,7 +1,7 @@
 using Confluent.Kafka;
 using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
-using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Infrastructure.Persistence.Entities;
@@ -192,7 +192,7 @@ public class MalformedMessageDeadLetterFlowTests : IAsyncLifetime
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
         services.AddConsumedDeadLetterStore();
-        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+        services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<PaymentEventPublisher>();
         services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());

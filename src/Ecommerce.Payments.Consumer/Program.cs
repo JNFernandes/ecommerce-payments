@@ -1,5 +1,5 @@
 using Ecommerce.Payments.Consumer.Consumers;
-using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Service.Payments;
@@ -22,8 +22,8 @@ builder.Services
     .Bind(builder.Configuration.GetSection(PaymentPolicyOptions.SectionName));
 
 builder.Services
-    .AddOptions<DeadLetterRetryOptions>()
-    .Bind(builder.Configuration.GetSection(DeadLetterRetryOptions.SectionName))
+    .AddOptions<OutboxRelayOptions>()
+    .Bind(builder.Configuration.GetSection(OutboxRelayOptions.SectionName))
     .Validate(
         options => options.IsValid(),
         "DeadLetterRetry settings must be positive and MaxDelayMs must be >= BaseDelayMs.")
@@ -41,7 +41,7 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Payments")));
 
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
-builder.Services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+builder.Services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
 // Per-order lock (ADR 0004) and cancellation markers (US-05).
 builder.Services.AddOrderPersistence();
 // Inbound messages that cannot be handled (US-06, ADR 0005).
@@ -55,11 +55,11 @@ builder.Services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<Pa
 builder.Services.AddScoped<ProcessPaymentHandler>();
 builder.Services.AddScoped<RefundPaymentHandler>();
 
-builder.Services.AddScoped<IDeadLetterRetryProcessor, DeadLetterRetryProcessor>();
+builder.Services.AddScoped<IOutboxRelayProcessor, OutboxRelayProcessor>();
 
 builder.Services.AddHostedService<OrderPlacedConsumer>();
 builder.Services.AddHostedService<OrderCancelledConsumer>();
-builder.Services.AddHostedService<DeadLetterRetryWorker>();
+builder.Services.AddHostedService<OutboxRelayWorker>();
 
 var host = builder.Build();
 host.Run();

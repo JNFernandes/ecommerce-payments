@@ -3,12 +3,12 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Ecommerce.Payments.Infrastructure.DeadLetters;
+namespace Ecommerce.Payments.Infrastructure.Outbox;
 
 /// <summary>
 /// Hosted service that retries dead-lettered payment events (US-03, ADR 0003,
 /// Constitution Principle VI "Dead-letter retry"). Every
-/// <see cref="DeadLetterRetryOptions.IntervalMs"/> it runs one <see cref="IDeadLetterRetryProcessor"/>
+/// <see cref="OutboxRelayOptions.PollIntervalMs"/> it runs one <see cref="IOutboxRelayProcessor"/>
 /// cycle in a fresh DI scope.
 ///
 /// Startup never waits on Kafka or the database: <see cref="ExecuteAsync"/> yields before doing
@@ -16,19 +16,19 @@ namespace Ecommerce.Payments.Infrastructure.DeadLetters;
 /// crashing the host (spec FR-012/FR-013, Constitution "Startup &amp; broker availability"). On
 /// shutdown the stopping token cancels the cycle in flight and the loop exits.
 /// </summary>
-public sealed class DeadLetterRetryWorker : BackgroundService
+public sealed class OutboxRelayWorker : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly DeadLetterRetryOptions _options;
+    private readonly OutboxRelayOptions _options;
     private readonly TimeProvider _timeProvider;
-    private readonly ILogger<DeadLetterRetryWorker> _logger;
+    private readonly ILogger<OutboxRelayWorker> _logger;
 
     /// <summary>Creates the worker.</summary>
-    public DeadLetterRetryWorker(
+    public OutboxRelayWorker(
         IServiceScopeFactory scopeFactory,
-        IOptions<DeadLetterRetryOptions> options,
+        IOptions<OutboxRelayOptions> options,
         TimeProvider timeProvider,
-        ILogger<DeadLetterRetryWorker> logger)
+        ILogger<OutboxRelayWorker> logger)
     {
         _scopeFactory = scopeFactory;
         _options = options.Value;
@@ -42,14 +42,14 @@ public sealed class DeadLetterRetryWorker : BackgroundService
         // Return control to the host before any I/O so startup never depends on Kafka/PostgreSQL.
         await Task.Yield();
 
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(_options.IntervalMs), _timeProvider);
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(_options.PollIntervalMs), _timeProvider);
 
         do
         {
             try
             {
                 await using var scope = _scopeFactory.CreateAsyncScope();
-                var processor = scope.ServiceProvider.GetRequiredService<IDeadLetterRetryProcessor>();
+                var processor = scope.ServiceProvider.GetRequiredService<IOutboxRelayProcessor>();
                 await processor.RunCycleAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

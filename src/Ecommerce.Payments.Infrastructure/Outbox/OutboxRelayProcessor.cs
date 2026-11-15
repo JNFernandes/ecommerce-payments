@@ -4,33 +4,33 @@ using Ecommerce.Payments.Infrastructure.Persistence.Entities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Ecommerce.Payments.Infrastructure.DeadLetters;
+namespace Ecommerce.Payments.Infrastructure.Outbox;
 
 /// <summary>
 /// One retry cycle over <c>payment_dead_letters</c> (US-03, ADR 0003). For up to
-/// <see cref="DeadLetterRetryOptions.BatchSize"/> rows: open a transaction, claim one due row
+/// <see cref="OutboxRelayOptions.BatchSize"/> rows: open a transaction, claim one due row
 /// with <c>FOR UPDATE SKIP LOCKED</c>, republish its stored payload unchanged through
 /// <see cref="IRawEventPublisher"/> (which never writes a new dead letter), update the row's
-/// bookkeeping (<see cref="DeadLetterRetryPolicy"/>: Resolved, rescheduled with backoff, or
+/// bookkeeping (<see cref="OutboxRetryPolicy"/>: Resolved, rescheduled with backoff, or
 /// Exhausted) and commit. One short transaction per row keeps locks bounded to a single publish
 /// and lets several instances work in parallel without ever processing the same row. If the
 /// cycle is cancelled mid-publish, the row's transaction rolls back and the row stays due.
 /// </summary>
-public sealed class DeadLetterRetryProcessor : IDeadLetterRetryProcessor
+public sealed class OutboxRelayProcessor : IOutboxRelayProcessor
 {
-    private readonly IPaymentDeadLetterRepository _repository;
+    private readonly IPaymentOutboxRepository _repository;
     private readonly IRawEventPublisher _publisher;
-    private readonly DeadLetterRetryOptions _options;
+    private readonly OutboxRelayOptions _options;
     private readonly TimeProvider _timeProvider;
-    private readonly ILogger<DeadLetterRetryProcessor> _logger;
+    private readonly ILogger<OutboxRelayProcessor> _logger;
 
     /// <summary>Creates a processor for one DI scope.</summary>
-    public DeadLetterRetryProcessor(
-        IPaymentDeadLetterRepository repository,
+    public OutboxRelayProcessor(
+        IPaymentOutboxRepository repository,
         IRawEventPublisher publisher,
-        IOptions<DeadLetterRetryOptions> options,
+        IOptions<OutboxRelayOptions> options,
         TimeProvider timeProvider,
-        ILogger<DeadLetterRetryProcessor> logger)
+        ILogger<OutboxRelayProcessor> logger)
     {
         _repository = repository;
         _publisher = publisher;
@@ -65,14 +65,14 @@ public sealed class DeadLetterRetryProcessor : IDeadLetterRetryProcessor
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // Update the existing row; the raw publisher never creates a new dead letter.
-                var exhausted = DeadLetterRetryPolicy.ApplyFailure(row, ex.Message, _timeProvider.GetUtcNow(), _options);
+                var exhausted = OutboxRetryPolicy.ApplyFailure(row, ex.Message, _timeProvider.GetUtcNow(), _options);
                 await _repository.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 LogFailure(row, ex, exhausted);
                 continue;
             }
 
-            DeadLetterRetryPolicy.ApplySuccess(row, _timeProvider.GetUtcNow());
+            OutboxRetryPolicy.ApplySuccess(row, _timeProvider.GetUtcNow());
             await _repository.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
@@ -88,7 +88,7 @@ public sealed class DeadLetterRetryProcessor : IDeadLetterRetryProcessor
         return attempted;
     }
 
-    private void LogFailure(PaymentDeadLetterEntity row, Exception error, bool exhausted)
+    private void LogFailure(OutboxEntryEntity row, Exception error, bool exhausted)
     {
         if (exhausted)
         {
@@ -108,13 +108,13 @@ public sealed class DeadLetterRetryProcessor : IDeadLetterRetryProcessor
         _logger.LogWarning(
             error,
             "Retry {RetryCount} of dead letter {DeadLetterId} ({EventType} for payment {PaymentId}) to {Topic} failed; " +
-            "next retry at {NextRetryAt}. Error: {LastError}",
+            "next retry at {NextAttemptAt}. Error: {LastError}",
             row.RetryCount,
             row.Id,
             row.EventType,
             row.PaymentId,
             row.Topic,
-            row.NextRetryAt,
+            row.NextAttemptAt,
             row.LastError);
     }
 }
