@@ -46,8 +46,10 @@ public sealed class ProcessPaymentHandler
     /// <summary>
     /// Processes a single validated <c>OrderPlaced</c> event. Inside one per-order transaction
     /// (which serialises it against an <c>OrderCancelled</c> for the same order — ADR 0004):
-    /// returns if the order already has a payment (idempotency, Constitution II), otherwise
-    /// creates and evaluates the <see cref="Payment"/>, saves it and commits. Only after the
+    /// returns if the order already has a payment (idempotency, Constitution II); returns with
+    /// one Information log, creating and publishing nothing, if the order has a cancellation
+    /// marker (Constitution VI "Cancellation markers"); otherwise creates and evaluates the
+    /// <see cref="Payment"/>, saves it and commits. Only after the
     /// commit is the resulting event published. The whole transaction is retried for transient
     /// failures; if it never succeeds, the failure is logged and propagated so the Consumer does
     /// not commit the offset.
@@ -55,7 +57,7 @@ public sealed class ProcessPaymentHandler
     public async Task HandleAsync(OrderPlacedEvent orderPlaced, CancellationToken cancellationToken)
     {
         var orderId = orderPlaced.AggregateId;
-        PaymentDomainEvent? outcome;
+        Outcome outcome;
 
         try
         {
@@ -79,24 +81,40 @@ public sealed class ProcessPaymentHandler
         // path with a different event type, never through the catch block above.
         switch (outcome)
         {
-            case PaymentProcessed processed:
+            case Outcome.Created { Event: PaymentProcessed processed }:
                 await _publisher.PublishAsync(processed, cancellationToken);
                 break;
-            case PaymentFailed failed:
+            case Outcome.Created { Event: PaymentFailed failed }:
                 await _publisher.PublishFailedAsync(failed, cancellationToken);
+                break;
+            case Outcome.OrderCancelled cancelled:
+                _logger.LogInformation(
+                    "Not charging order {OrderId} (OrderPlaced {EventId}): the order was already cancelled by " +
+                    "OrderCancelled {CancelEventId}; no payment created and nothing published.",
+                    orderId,
+                    orderPlaced.EventId,
+                    cancelled.CancelEventId);
                 break;
         }
     }
 
-    /// <summary>One attempt; returns the event to publish, or null when there is nothing to do.</summary>
-    private async Task<PaymentDomainEvent?> CreatePaymentAsync(OrderPlacedEvent orderPlaced, CancellationToken cancellationToken)
+    /// <summary>One attempt inside the per-order transaction; commits only when it writes.</summary>
+    private async Task<Outcome> CreatePaymentAsync(OrderPlacedEvent orderPlaced, CancellationToken cancellationToken)
     {
         var orderId = orderPlaced.AggregateId;
         await using var transaction = await _unitOfWork.BeginAsync(orderId, cancellationToken);
 
         if (await _repository.ExistsByOrderIdAsync(orderId, cancellationToken))
         {
-            return null;
+            return new Outcome.AlreadyExists();
+        }
+
+        // The cancellation overtook this OrderPlaced: never charge it (Constitution VI
+        // "Cancellation markers").
+        var marker = await _markers.GetByOrderIdAsync(orderId, cancellationToken);
+        if (marker is not null)
+        {
+            return new Outcome.OrderCancelled(marker.SourceEventId);
         }
 
         var payment = Payment.CreatePending(
@@ -110,6 +128,16 @@ public sealed class ProcessPaymentHandler
 
         await _repository.SaveAsync(payment, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return outcome;
+        return new Outcome.Created(outcome);
+    }
+
+    /// <summary>Result of one attempt; decided inside the transaction, acted on after it.</summary>
+    private abstract record Outcome
+    {
+        public sealed record Created(PaymentDomainEvent Event) : Outcome;
+
+        public sealed record AlreadyExists : Outcome;
+
+        public sealed record OrderCancelled(Guid CancelEventId) : Outcome;
     }
 }

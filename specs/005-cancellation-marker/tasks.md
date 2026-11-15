@@ -220,16 +220,16 @@ is logged. Orders without a marker are unchanged.
 
 ### Tests for User Story 2
 
-- [ ] T016 [P] [US2] Add unit tests to `tests/Ecommerce.Payments.Service.Tests/Payments/ProcessPaymentHandlerTests.cs`:
+- [X] T016 [P] [US2] Add unit tests to `tests/Ecommerce.Payments.Service.Tests/Payments/ProcessPaymentHandlerTests.cs`:
   - `Should_Not_Create_Or_Publish_Payment_When_Order_Has_Cancellation_Marker`: no `SaveAsync`, no `PublishAsync`, no `PublishFailedAsync`, and one Information log naming the order and the marker's `SourceEventId`. Check the existing tests for how the logger is captured; add a list logger if there is none.
   - `Should_Check_Payment_Before_Marker`: when a payment exists, the marker repository is not queried.
   - `Should_Process_Normally_When_No_Marker`: the existing happy path, with the marker mock returning null.
-- [ ] T017 [P] [US2] Extend `tests/Ecommerce.Payments.Integration.Tests/CancellationBeforePaymentTests.cs`:
+- [X] T017 [P] [US2] Extend `tests/Ecommerce.Payments.Integration.Tests/CancellationBeforePaymentTests.cs`:
   - `OrderPlaced_After_Marker_Creates_No_Payment_And_Publishes_Nothing`: uses `FakePaymentEventPublisher` and checks that nothing was recorded.
   - `Redelivered_OrderPlaced_After_Marker_Still_Creates_Nothing`.
   - `OrderPlaced_Then_OrderCancelled_Refunds_And_Records_No_Marker`: a below-threshold amount gives Refunded; no marker row.
   - `Failed_Payment_Then_OrderCancelled_Records_No_Marker`.
-- [ ] T018 [P] [US2] Component test **(new)** in `tests/Ecommerce.Payments.Component.Tests/CancelBeforePlaceFlowTests.cs`, with PostgreSQL and Kafka containers and both consumers hosted, set up like `RefundFlowTests.cs`:
+- [X] T018 [P] [US2] Component test **(new)** in `tests/Ecommerce.Payments.Component.Tests/CancelBeforePlaceFlowTests.cs`, with PostgreSQL and Kafka containers and both consumers hosted, set up like `RefundFlowTests.cs`:
   - `Cancel_Then_Place_Publishes_Nothing_And_Charges_Nothing`:
     1. Produce `OrderCancelled` for X and wait for the marker row.
     2. Produce `OrderPlaced` for X and note its delivery offset from the produce result.
@@ -242,7 +242,7 @@ is logged. Orders without a marker are unchanged.
 
 ### Implementation for User Story 2
 
-- [ ] T019 [US2] In `src/Ecommerce.Payments.Service/Payments/ProcessPaymentHandler.cs`, inside the transaction and after the payment-exists check, call `ICancellationMarkerRepository.GetByOrderIdAsync(orderId)`.
+- [X] T019 [US2] In `src/Ecommerce.Payments.Service/Payments/ProcessPaymentHandler.cs`, inside the transaction and after the payment-exists check, call `ICancellationMarkerRepository.GetByOrderIdAsync(orderId)`.
   - If a marker is found, return a `SkipCancelled(marker.SourceEventId)` result without calling Domain or saving.
   - After the delegate, log one Information line: "Not charging order {OrderId} (OrderPlaced {EventId}): the order was already cancelled by OrderCancelled {CancelEventId}; no payment created and nothing published."
   - Update the class XML doc to cite Constitution VI "Cancellation markers".

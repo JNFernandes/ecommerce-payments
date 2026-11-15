@@ -101,6 +101,62 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
         Assert.Equal(0, await dbContext.CancellationMarkers.CountAsync());
     }
 
+    // ---- User Story 2: do not charge a marked order ----
+
+    [Fact]
+    public async Task OrderPlaced_After_Marker_Creates_No_Payment_And_Publishes_Nothing()
+    {
+        var orderId = Guid.NewGuid();
+        Assert.True(await CancelAsync(orderId, Guid.NewGuid()));
+
+        Assert.True(await PlaceAsync(orderId, ProcessedAmount));
+
+        Assert.Equal(0, await PaymentCountAsync(orderId));
+        Assert.DoesNotContain(Publisher.Published, e => e.OrderId == orderId);
+        Assert.DoesNotContain(Publisher.PublishedFailures, e => e.OrderId == orderId);
+    }
+
+    [Fact]
+    public async Task Redelivered_OrderPlaced_After_Marker_Still_Creates_Nothing()
+    {
+        var orderId = Guid.NewGuid();
+        var placedEventId = Guid.NewGuid();
+        Assert.True(await CancelAsync(orderId, Guid.NewGuid()));
+
+        Assert.True(await PlaceAsync(orderId, FailedAmount, placedEventId));
+        Assert.True(await PlaceAsync(orderId, FailedAmount, placedEventId));
+
+        Assert.Equal(0, await PaymentCountAsync(orderId));
+        Assert.DoesNotContain(Publisher.Published, e => e.OrderId == orderId);
+        Assert.DoesNotContain(Publisher.PublishedFailures, e => e.OrderId == orderId);
+    }
+
+    [Fact]
+    public async Task OrderPlaced_Then_OrderCancelled_Refunds_And_Records_No_Marker()
+    {
+        var orderId = Guid.NewGuid();
+        Assert.True(await PlaceAsync(orderId, ProcessedAmount));
+
+        Assert.True(await CancelAsync(orderId, Guid.NewGuid()));
+
+        Assert.Equal(PaymentStatus.Refunded, (await LoadPaymentAsync(orderId)).Status);
+        Assert.Empty(await MarkersAsync(orderId));
+        Assert.Single(Publisher.PublishedRefunds, r => r.OrderId == orderId);
+    }
+
+    [Fact]
+    public async Task Failed_Payment_Then_OrderCancelled_Records_No_Marker()
+    {
+        var orderId = Guid.NewGuid();
+        Assert.True(await PlaceAsync(orderId, FailedAmount));
+
+        Assert.True(await CancelAsync(orderId, Guid.NewGuid()));
+
+        Assert.Equal(PaymentStatus.Failed, (await LoadPaymentAsync(orderId)).Status);
+        Assert.Empty(await MarkersAsync(orderId));
+        Assert.DoesNotContain(Publisher.PublishedRefunds, r => r.OrderId == orderId);
+    }
+
     // ---- Helpers ----
 
     private async Task<bool> CancelAsync(Guid orderId, Guid eventId, string? reason = null)
