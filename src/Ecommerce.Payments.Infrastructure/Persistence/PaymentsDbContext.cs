@@ -5,8 +5,8 @@ namespace Ecommerce.Payments.Infrastructure.Persistence;
 
 /// <summary>
 /// EF Core context for the payments schema — the <c>payments</c> table (with its idempotency
-/// unique index on <c>order_id</c>), the <c>payment_dead_letters</c> table (with its partial
-/// due-row index used by the dead-letter retry worker) and the <c>order_cancellation_markers</c>
+/// unique index on <c>order_id</c>), the <c>payment_outbox</c> table (outbound events with
+/// their relay bookkeeping, a recording sequence and a partial due-row index; ADR 0006), the <c>order_cancellation_markers</c>
 /// table (primary key <c>OrderId</c>: one marker per order), and the <c>consumed_dead_letters</c>
 /// table (inbound messages that could not be handled; unique per Kafka position).
 /// </summary>
@@ -21,8 +21,8 @@ public sealed class PaymentsDbContext : DbContext
     /// <summary>The <c>payments</c> table.</summary>
     public DbSet<PaymentEntity> Payments => Set<PaymentEntity>();
 
-    /// <summary>The <c>payment_dead_letters</c> table: events that failed to publish, with retry bookkeeping.</summary>
-    public DbSet<PaymentDeadLetterEntity> PaymentDeadLetters => Set<PaymentDeadLetterEntity>();
+    /// <summary>The <c>payment_outbox</c> table: outbound payment events and their delivery state.</summary>
+    public DbSet<OutboxEntryEntity> PaymentOutbox => Set<OutboxEntryEntity>();
 
     /// <summary>The <c>order_cancellation_markers</c> table: orders cancelled before their payment existed.</summary>
     public DbSet<CancellationMarkerEntity> CancellationMarkers => Set<CancellationMarkerEntity>();
@@ -41,16 +41,22 @@ public sealed class PaymentsDbContext : DbContext
             payment.HasIndex(p => p.OrderId).IsUnique();
         });
 
-        modelBuilder.Entity<PaymentDeadLetterEntity>(deadLetter =>
+        modelBuilder.Entity<OutboxEntryEntity>(entry =>
         {
-            deadLetter.ToTable("payment_dead_letters");
-            deadLetter.HasKey(d => d.Id);
-            deadLetter.Property(d => d.Payload).HasColumnType("jsonb");
-            deadLetter.Property(d => d.Status).HasConversion<string>().HasMaxLength(20);
-            // Keeps the retry worker's claim query cheap as resolved rows accumulate.
-            deadLetter.HasIndex(d => d.NextRetryAt)
-                .HasDatabaseName("IX_payment_dead_letters_due")
-                .HasFilter("\"Status\" = 'PendingRetry'");
+            entry.ToTable("payment_outbox");
+            entry.HasKey(e => e.Id);
+            entry.Property(e => e.Sequence).UseIdentityByDefaultColumn();
+            entry.HasIndex(e => e.Sequence).IsUnique().HasDatabaseName("IX_payment_outbox_sequence");
+            entry.HasIndex(e => e.EventId).IsUnique().HasDatabaseName("IX_payment_outbox_event_id");
+            entry.Property(e => e.Payload).HasColumnType("jsonb");
+            entry.Property(e => e.Status).HasConversion<string>().HasMaxLength(20);
+            // Keeps the relay's claim query cheap as published entries accumulate.
+            entry.HasIndex(e => e.NextAttemptAt)
+                .HasDatabaseName("IX_payment_outbox_due")
+                .HasFilter("\"Status\" = 'Pending'");
+            // Per-payment ordering check (an earlier unpublished entry blocks later ones).
+            entry.HasIndex(e => new { e.PaymentId, e.Sequence })
+                .HasDatabaseName("IX_payment_outbox_payment_sequence");
         });
 
         modelBuilder.Entity<CancellationMarkerEntity>(marker =>

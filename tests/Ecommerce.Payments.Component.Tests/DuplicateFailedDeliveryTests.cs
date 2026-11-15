@@ -1,5 +1,6 @@
 using Confluent.Kafka;
 using Ecommerce.Payments.Consumer.Consumers;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Service.Payments;
@@ -63,6 +64,7 @@ public class DuplicateFailedDeliveryTests : IAsyncLifetime
         var paymentCount = await dbContext.Payments.CountAsync(p => p.OrderId == orderId);
         Assert.Equal(1, paymentCount);
 
+        Assert.Equal(1, await provider.RunRelayCycleAsync());
         var publishedCount = CountPublishedFailuresForOrder(orderId, TimeSpan.FromSeconds(15));
         Assert.Equal(1, publishedCount);
     }
@@ -75,8 +77,8 @@ public class DuplicateFailedDeliveryTests : IAsyncLifetime
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
         services.AddSingleton(TimeProvider.System);
-        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
-        services.AddSingleton<IPaymentEventPublisher, PaymentEventPublisher>();
+        services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
+        services.AddOutboxRelay(hostWorker: false);
         services.AddScoped<ProcessPaymentHandler>();
         services
             .AddOptions<KafkaOptions>()

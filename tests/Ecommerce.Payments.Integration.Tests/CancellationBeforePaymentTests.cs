@@ -1,6 +1,7 @@
 using System.Globalization;
 using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Infrastructure.Persistence.Entities;
@@ -17,7 +18,7 @@ namespace Ecommerce.Payments.Integration.Tests;
 /// US-05 against a real PostgreSQL container: an <c>OrderCancelled</c> that arrives before the
 /// order's payment records a cancellation marker, and a later <c>OrderPlaced</c> for that order
 /// creates no payment and publishes nothing. Publishing is recorded by
-/// <see cref="FakePaymentEventPublisher"/>.
+/// <see cref="OutboxReader"/>.
 /// </summary>
 public class CancellationBeforePaymentTests : IAsyncLifetime
 {
@@ -45,8 +46,8 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
         await _postgres.DisposeAsync();
     }
 
-    private FakePaymentEventPublisher Publisher =>
-        (FakePaymentEventPublisher)_provider.GetRequiredService<IPaymentEventPublisher>();
+    private OutboxReader Outbox =>
+        _provider.GetRequiredService<OutboxReader>();
 
     // ---- User Story 1: record the marker ----
 
@@ -62,7 +63,7 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
         Assert.Equal(eventId, marker.SourceEventId);
         Assert.Equal("stock rejected", marker.Reason);
         Assert.Equal(0, await PaymentCountAsync(orderId));
-        Assert.Empty(Publisher.PublishedRefunds);
+        Assert.Empty(Outbox.Refunded);
     }
 
     [Fact]
@@ -113,8 +114,8 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
         Assert.True(await PlaceAsync(orderId, ProcessedAmount));
 
         Assert.Equal(0, await PaymentCountAsync(orderId));
-        Assert.DoesNotContain(Publisher.Published, e => e.OrderId == orderId);
-        Assert.DoesNotContain(Publisher.PublishedFailures, e => e.OrderId == orderId);
+        Assert.DoesNotContain(Outbox.Processed, e => e.OrderId == orderId);
+        Assert.DoesNotContain(Outbox.Failed, e => e.OrderId == orderId);
     }
 
     [Fact]
@@ -128,8 +129,8 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
         Assert.True(await PlaceAsync(orderId, FailedAmount, placedEventId));
 
         Assert.Equal(0, await PaymentCountAsync(orderId));
-        Assert.DoesNotContain(Publisher.Published, e => e.OrderId == orderId);
-        Assert.DoesNotContain(Publisher.PublishedFailures, e => e.OrderId == orderId);
+        Assert.DoesNotContain(Outbox.Processed, e => e.OrderId == orderId);
+        Assert.DoesNotContain(Outbox.Failed, e => e.OrderId == orderId);
     }
 
     [Fact]
@@ -142,7 +143,7 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
 
         Assert.Equal(PaymentStatus.Refunded, (await LoadPaymentAsync(orderId)).Status);
         Assert.Empty(await MarkersAsync(orderId));
-        Assert.Single(Publisher.PublishedRefunds, r => r.OrderId == orderId);
+        Assert.Single(Outbox.Refunded, r => r.OrderId == orderId);
     }
 
     [Fact]
@@ -155,7 +156,7 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
 
         Assert.Equal(PaymentStatus.Failed, (await LoadPaymentAsync(orderId)).Status);
         Assert.Empty(await MarkersAsync(orderId));
-        Assert.DoesNotContain(Publisher.PublishedRefunds, r => r.OrderId == orderId);
+        Assert.DoesNotContain(Outbox.Refunded, r => r.OrderId == orderId);
     }
 
     // ---- Helpers ----
@@ -209,7 +210,8 @@ public class CancellationBeforePaymentTests : IAsyncLifetime
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
+        services.AddPaymentOutbox();
+        services.AddSingleton<OutboxReader>();
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();
         services.AddOptions<PaymentPolicyOptions>().Configure(o => o.MaxAmountThreshold = MaxAmountThreshold);

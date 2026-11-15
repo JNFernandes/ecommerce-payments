@@ -1,5 +1,6 @@
 using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Service.Payments;
@@ -49,9 +50,9 @@ public class OrderPlacedToFailedPaymentTests : IAsyncLifetime
         Assert.NotNull(saved.FailedAt);
         Assert.Null(saved.ProcessedAt);
 
-        var publisher = (FakePaymentEventPublisher)provider.GetRequiredService<IPaymentEventPublisher>();
-        Assert.Single(publisher.PublishedFailures, p => p.OrderId == orderId);
-        Assert.Empty(publisher.Published);
+        var outbox = provider.GetRequiredService<OutboxReader>();
+        Assert.Single(outbox.Failed, p => p.OrderId == orderId);
+        Assert.Empty(outbox.Processed);
     }
 
     private ServiceProvider BuildServiceProvider()
@@ -61,7 +62,8 @@ public class OrderPlacedToFailedPaymentTests : IAsyncLifetime
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
+        services.AddPaymentOutbox();
+        services.AddSingleton<OutboxReader>();
         services.AddScoped<ProcessPaymentHandler>();
         services
             .AddOptions<KafkaOptions>()

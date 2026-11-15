@@ -14,7 +14,7 @@ public class RefundPaymentHandlerTests
 {
     private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 11, 12, 10, 5, 0, TimeSpan.Zero));
     private readonly Mock<IPaymentRepository> _repository = new();
-    private readonly Mock<IPaymentEventPublisher> _publisher = new();
+    private readonly Mock<IPaymentOutbox> _publisher = new();
     private readonly Mock<ICancellationMarkerRepository> _markers = new();
     private readonly RecordingOrderUnitOfWork _unitOfWork = new();
 
@@ -55,27 +55,27 @@ public class RefundPaymentHandlerTests
             logger ?? NullLogger<RefundPaymentHandler>.Instance);
 
     [Fact]
-    public async Task Should_Save_Refund_Before_Publishing_PaymentRefunded()
+    public async Task Should_Record_PaymentRefunded_In_Outbox_After_Save_And_Before_Commit()
     {
         var orderId = Guid.NewGuid();
         Stored(StoredPayment(orderId, PaymentStatus.Processed));
-        var calls = new List<string>();
+        var calls = _unitOfWork.Calls;
         _repository
             .Setup(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .Callback(() => calls.Add("Save"))
             .ReturnsAsync(true);
         _publisher
-            .Setup(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()))
-            .Callback(() => calls.Add("Publish"))
+            .Setup(p => p.AddRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()))
+            .Callback(() => calls.Add("Outbox:Refunded"))
             .Returns(Task.CompletedTask);
 
         await CreateHandler().HandleAsync(Cancellation(orderId), CancellationToken.None);
 
-        Assert.Equal(["Save", "Publish"], calls);
+        Assert.Equal([$"Begin:{orderId}", "Save", "Outbox:Refunded", "Commit", "Dispose"], calls);
     }
 
     [Fact]
-    public async Task Should_Publish_PaymentRefunded_With_Payment_Order_Amount_Currency_And_RefundedAt()
+    public async Task Should_Record_PaymentRefunded_With_Payment_Order_Amount_Currency_And_RefundedAt()
     {
         var orderId = Guid.NewGuid();
         var payment = StoredPayment(orderId, PaymentStatus.Processed);
@@ -83,7 +83,7 @@ public class RefundPaymentHandlerTests
         _repository.Setup(r => r.SaveRefundAsync(payment, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         PaymentRefunded? published = null;
         _publisher
-            .Setup(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()))
+            .Setup(p => p.AddRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()))
             .Callback<PaymentRefunded, CancellationToken>((e, _) => published = e)
             .Returns(Task.CompletedTask);
 
@@ -125,7 +125,7 @@ public class RefundPaymentHandlerTests
         await CreateHandler().HandleAsync(cancellation, CancellationToken.None);
 
         _repository.Verify(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
-        _publisher.Verify(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
+        _publisher.Verify(p => p.AddRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class RefundPaymentHandlerTests
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => CreateHandler().HandleAsync(Cancellation(orderId), CancellationToken.None));
 
-        _publisher.Verify(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
+        _publisher.Verify(p => p.AddRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
         // 1 attempt + 3 retries.
         _repository.Verify(r => r.SaveRefundAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Exactly(4));
     }
@@ -219,7 +219,7 @@ public class RefundPaymentHandlerTests
 
         Assert.Equal(LogLevel.Error, Assert.Single(logger.Entries).Level);
         Assert.Equal(0, _unitOfWork.Commits);
-        _publisher.Verify(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
+        _publisher.Verify(p => p.AddRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
         // 1 attempt + 3 retries.
         _markers.Verify(m => m.AddAsync(It.IsAny<CancellationMarker>(), It.IsAny<CancellationToken>()), Times.Exactly(4));
     }
@@ -284,7 +284,7 @@ public class RefundPaymentHandlerTests
         OrderCancelledEvent cancellation,
         string expectedText)
     {
-        _publisher.Verify(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
+        _publisher.Verify(p => p.AddRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Never);
         var (level, message) = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Information, level);
         Assert.Contains(expectedText, message, StringComparison.Ordinal);
@@ -305,6 +305,6 @@ public class RefundPaymentHandlerTests
 
         await CreateHandler().HandleAsync(Cancellation(orderId), CancellationToken.None);
 
-        _publisher.Verify(p => p.PublishRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Once);
+        _publisher.Verify(p => p.AddRefundedAsync(It.IsAny<PaymentRefunded>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

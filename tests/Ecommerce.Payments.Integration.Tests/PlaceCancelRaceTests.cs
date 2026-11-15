@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Ecommerce.Payments.Domain.Orders;
 using Ecommerce.Payments.Domain.Payments;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Service.IntegrationEvents;
 using Ecommerce.Payments.Service.Orders;
@@ -48,8 +49,8 @@ public sealed class PlaceCancelRaceTests : IAsyncLifetime, IDisposable
 
     public void Dispose() => _logs.Dispose();
 
-    private FakePaymentEventPublisher Publisher =>
-        (FakePaymentEventPublisher)_provider.GetRequiredService<IPaymentEventPublisher>();
+    private OutboxReader Outbox =>
+        _provider.GetRequiredService<OutboxReader>();
 
     [Fact]
     public async Task Concurrent_Place_And_Cancel_Always_End_In_Allowed_Outcome()
@@ -169,13 +170,13 @@ public sealed class PlaceCancelRaceTests : IAsyncLifetime, IDisposable
         await using var context = CreateDbContext();
         var hasMarker = await context.CancellationMarkers.AnyAsync(m => m.OrderId == orderId);
         var payment = await context.Payments.AsNoTracking().SingleOrDefaultAsync(p => p.OrderId == orderId);
-        var refunds = Publisher.PublishedRefunds.Count(r => r.OrderId == orderId);
+        var refunds = Outbox.Refunded.Count(r => r.OrderId == orderId);
 
         if (hasMarker)
         {
             Assert.Null(payment);
-            Assert.DoesNotContain(Publisher.Published, e => e.OrderId == orderId);
-            Assert.DoesNotContain(Publisher.PublishedFailures, e => e.OrderId == orderId);
+            Assert.DoesNotContain(Outbox.Processed, e => e.OrderId == orderId);
+            Assert.DoesNotContain(Outbox.Failed, e => e.OrderId == orderId);
             Assert.Equal(0, refunds);
             return "marker";
         }
@@ -236,7 +237,8 @@ public sealed class PlaceCancelRaceTests : IAsyncLifetime, IDisposable
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
+        services.AddPaymentOutbox();
+        services.AddSingleton<OutboxReader>();
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();
         services.AddOptions<PaymentPolicyOptions>().Configure(o => o.MaxAmountThreshold = MaxAmountThreshold);

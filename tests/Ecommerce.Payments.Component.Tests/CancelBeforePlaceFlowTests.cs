@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Confluent.Kafka;
 using Ecommerce.Payments.Consumer.Consumers;
-using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Service.Payments;
@@ -164,9 +164,8 @@ public class CancelBeforePlaceFlowTests : IAsyncLifetime
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+        services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<PaymentEventPublisher>();
-        services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();
@@ -183,6 +182,7 @@ public class CancelBeforePlaceFlowTests : IAsyncLifetime
                 o.PaymentFailedTopic = PaymentFailedTopic;
                 o.PaymentRefundedTopic = PaymentRefundedTopic;
             });
+        services.AddOutboxRelay();
         services.AddSingleton<IHostedService, OrderPlacedConsumer>();
         services.AddSingleton<IHostedService, OrderCancelledConsumer>();
 

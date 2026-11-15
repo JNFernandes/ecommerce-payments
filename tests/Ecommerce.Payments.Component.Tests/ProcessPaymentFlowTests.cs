@@ -2,6 +2,7 @@ using System.Text.Json;
 using Confluent.Kafka;
 using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Infrastructure.Persistence.Entities;
@@ -47,7 +48,9 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
         var orderId = Guid.NewGuid();
         ProduceOrderPlaced(orderId);
 
+        var relay = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>().OfType<OutboxRelayWorker>().Single();
         await consumer.StartAsync(CancellationToken.None);
+        await relay.StartAsync(CancellationToken.None);
         try
         {
             var payment = await PollForPaymentAsync(provider, orderId, TimeSpan.FromSeconds(30));
@@ -66,6 +69,7 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
         }
         finally
         {
+            await relay.StopAsync(CancellationToken.None);
             await consumer.StopAsync(CancellationToken.None);
         }
     }
@@ -78,8 +82,8 @@ public class ProcessPaymentFlowTests : IAsyncLifetime
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
         services.AddSingleton(TimeProvider.System);
-        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
-        services.AddSingleton<IPaymentEventPublisher, PaymentEventPublisher>();
+        services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
+        services.AddOutboxRelay();
         services.AddScoped<ProcessPaymentHandler>();
         services
             .AddOptions<KafkaOptions>()

@@ -10,10 +10,10 @@ namespace Ecommerce.Payments.Service.Payments;
 /// Orchestrates the end-to-end workflow for one consumed <c>OrderPlaced</c> message:
 /// per-order transaction (<see cref="IOrderUnitOfWork"/>) → idempotency check →
 /// Domain (<see cref="Payment.CreatePending"/> / <see cref="Payment.Evaluate"/>) →
-/// Repository (<see cref="IPaymentRepository.SaveAsync"/>) → commit →
-/// Publisher (<see cref="IPaymentEventPublisher.PublishAsync"/> or
-/// <see cref="IPaymentEventPublisher.PublishFailedAsync"/>), strictly in that order
-/// (Constitution Principle II). Contains no business rules of its own — those belong to Domain;
+/// Repository (<see cref="IPaymentRepository.SaveAsync"/>) → outbox
+/// (<see cref="IPaymentOutbox.AddProcessedAsync"/> or <see cref="IPaymentOutbox.AddFailedAsync"/>)
+/// → commit, all in one transaction (Constitution v1.3.0, Principle II). It never publishes: the
+/// outbox relay does, after the commit. Contains no business rules of its own — those belong to Domain;
 /// this class never inspects <see cref="Payment.Amount"/> itself, only the *type* of the domain
 /// event Domain already decided on.
 /// </summary>
@@ -22,7 +22,7 @@ public sealed class ProcessPaymentHandler
     private readonly IPaymentRepository _repository;
     private readonly ICancellationMarkerRepository _markers;
     private readonly IOrderUnitOfWork _unitOfWork;
-    private readonly IPaymentEventPublisher _publisher;
+    private readonly IPaymentOutbox _outbox;
     private readonly decimal _maxAmountThreshold;
     private readonly ILogger<ProcessPaymentHandler> _logger;
 
@@ -31,14 +31,14 @@ public sealed class ProcessPaymentHandler
         IPaymentRepository repository,
         ICancellationMarkerRepository markers,
         IOrderUnitOfWork unitOfWork,
-        IPaymentEventPublisher publisher,
+        IPaymentOutbox outbox,
         IOptions<PaymentPolicyOptions> paymentPolicyOptions,
         ILogger<ProcessPaymentHandler> logger)
     {
         _repository = repository;
         _markers = markers;
         _unitOfWork = unitOfWork;
-        _publisher = publisher;
+        _outbox = outbox;
         _maxAmountThreshold = paymentPolicyOptions.Value.MaxAmountThreshold;
         _logger = logger;
     }
@@ -49,8 +49,8 @@ public sealed class ProcessPaymentHandler
     /// returns if the order already has a payment (idempotency, Constitution II); returns with
     /// one Information log, creating and publishing nothing, if the order has a cancellation
     /// marker (Constitution VI "Cancellation markers"); otherwise creates and evaluates the
-    /// <see cref="Payment"/>, saves it and commits. Only after the
-    /// commit is the resulting event published. The whole transaction is retried for transient
+    /// <see cref="Payment"/>, saves it together with its outbox entry and commits; the relay
+    /// publishes the entry afterwards. The whole transaction is retried for transient
     /// failures; if it never succeeds, the failure is logged and propagated so the Consumer does
     /// not commit the offset.
     /// </summary>
@@ -77,24 +77,14 @@ public sealed class ProcessPaymentHandler
             throw;
         }
 
-        // A business failure is a normal, expected outcome — it flows through this same success
-        // path with a different event type, never through the catch block above.
-        switch (outcome)
+        if (outcome is Outcome.OrderCancelled cancelled)
         {
-            case Outcome.Created { Event: PaymentProcessed processed }:
-                await _publisher.PublishAsync(processed, cancellationToken);
-                break;
-            case Outcome.Created { Event: PaymentFailed failed }:
-                await _publisher.PublishFailedAsync(failed, cancellationToken);
-                break;
-            case Outcome.OrderCancelled cancelled:
-                _logger.LogInformation(
-                    "Not charging order {OrderId} (OrderPlaced {EventId}): the order was already cancelled by " +
-                    "OrderCancelled {CancelEventId}; no payment created and nothing published.",
-                    orderId,
-                    orderPlaced.EventId,
-                    cancelled.CancelEventId);
-                break;
+            _logger.LogInformation(
+                "Not charging order {OrderId} (OrderPlaced {EventId}): the order was already cancelled by " +
+                "OrderCancelled {CancelEventId}; no payment created and nothing published.",
+                orderId,
+                orderPlaced.EventId,
+                cancelled.CancelEventId);
         }
     }
 
@@ -127,14 +117,27 @@ public sealed class ProcessPaymentHandler
         var outcome = payment.Evaluate(_maxAmountThreshold);
 
         await _repository.SaveAsync(payment, cancellationToken);
+
+        // The event is recorded in the same transaction as the payment (outbox). A business
+        // failure is a normal outcome: it takes this same path with a different event type.
+        switch (outcome)
+        {
+            case PaymentProcessed processed:
+                await _outbox.AddProcessedAsync(processed, cancellationToken);
+                break;
+            case PaymentFailed failed:
+                await _outbox.AddFailedAsync(failed, cancellationToken);
+                break;
+        }
+
         await transaction.CommitAsync(cancellationToken);
-        return new Outcome.Created(outcome);
+        return new Outcome.Created();
     }
 
     /// <summary>Result of one attempt; decided inside the transaction, acted on after it.</summary>
     private abstract record Outcome
     {
-        public sealed record Created(PaymentDomainEvent Event) : Outcome;
+        public sealed record Created : Outcome;
 
         public sealed record AlreadyExists : Outcome;
 

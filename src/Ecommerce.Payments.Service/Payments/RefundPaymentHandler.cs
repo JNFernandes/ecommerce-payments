@@ -11,9 +11,10 @@ namespace Ecommerce.Payments.Service.Payments;
 /// per-order transaction (<see cref="IOrderUnitOfWork"/>) →
 /// Repository (<see cref="IPaymentRepository.GetByOrderIdAsync"/>) →
 /// <c>eventId</c> dedupe → Domain (<see cref="Payment.RequestRefund"/>) →
-/// Repository (<see cref="IPaymentRepository.SaveRefundAsync"/>) → commit →
-/// Publisher (<see cref="IPaymentEventPublisher.PublishRefundedAsync"/>), strictly in that order
-/// (Constitution Principle II). The refund rule lives in Domain; this class only switches on
+/// Repository (<see cref="IPaymentRepository.SaveRefundAsync"/>) → outbox
+/// (<see cref="IPaymentOutbox.AddRefundedAsync"/>) → commit, all in one transaction
+/// (Constitution v1.3.0, Principle II); the outbox relay publishes after the commit. The refund
+/// rule lives in Domain; this class only switches on
 /// the <see cref="RefundDecision"/> type. Cancellations that need no refund are normal outcomes:
 /// they return without error so the Consumer commits the offset (Constitution VI
 /// "Refund rules"). When the order has no payment yet, a <see cref="CancellationMarker"/> is
@@ -25,7 +26,7 @@ public sealed class RefundPaymentHandler
     private readonly IPaymentRepository _repository;
     private readonly ICancellationMarkerRepository _markers;
     private readonly IOrderUnitOfWork _unitOfWork;
-    private readonly IPaymentEventPublisher _publisher;
+    private readonly IPaymentOutbox _outbox;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<RefundPaymentHandler> _logger;
 
@@ -34,20 +35,21 @@ public sealed class RefundPaymentHandler
         IPaymentRepository repository,
         ICancellationMarkerRepository markers,
         IOrderUnitOfWork unitOfWork,
-        IPaymentEventPublisher publisher,
+        IPaymentOutbox outbox,
         TimeProvider timeProvider,
         ILogger<RefundPaymentHandler> logger)
     {
         _repository = repository;
         _markers = markers;
         _unitOfWork = unitOfWork;
-        _publisher = publisher;
+        _outbox = outbox;
         _timeProvider = timeProvider;
         _logger = logger;
     }
 
     /// <summary>
-    /// Refunds the order's payment if it is Processed, saving before publishing. Returns normally
+    /// Refunds the order's payment if it is Processed, saving the refund and its outbox entry in
+    /// one transaction. Returns normally
     /// when there is nothing to refund. Throws (after logging) only when the database stays
     /// unavailable through the bounded retries, so the Consumer retries the message.
     /// </summary>
@@ -73,11 +75,6 @@ public sealed class RefundPaymentHandler
         }
 
         Log(orderCancelled, outcome);
-
-        if (outcome is Outcome.Refunded refunded)
-        {
-            await _publisher.PublishRefundedAsync(refunded.Event, cancellationToken);
-        }
     }
 
     /// <summary>One attempt inside the per-order transaction; commits only when it writes.</summary>
@@ -112,6 +109,8 @@ public sealed class RefundPaymentHandler
             return new Outcome.Ignored(payment, RefundIgnoredReason.AlreadyRefunded);
         }
 
+        // Recorded in the same transaction as the refund (outbox); published by the relay.
+        await _outbox.AddRefundedAsync(refundedDecision.Event, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new Outcome.Refunded(refundedDecision.Event);
     }

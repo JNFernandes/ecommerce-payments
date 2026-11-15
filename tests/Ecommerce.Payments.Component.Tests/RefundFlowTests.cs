@@ -2,7 +2,7 @@ using System.Text.Json;
 using Confluent.Kafka;
 using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
-using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Infrastructure.Persistence.Entities;
@@ -111,22 +111,22 @@ public class RefundFlowTests : IAsyncLifetime
         var payment = await LoadPaymentAsync(orderId);
         Assert.Equal(PaymentStatus.Refunded, payment.Status);
 
-        PaymentDeadLetterEntity refundDeadLetter;
+        OutboxEntryEntity refundDeadLetter;
         await using (var dbContext = CreateDbContext())
         {
-            refundDeadLetter = await dbContext.PaymentDeadLetters.AsNoTracking()
+            refundDeadLetter = await dbContext.PaymentOutbox.AsNoTracking()
                 .SingleAsync(d => d.PaymentId == payment.Id && d.EventType == "PaymentRefundedEvent");
         }
 
         Assert.Equal(PaymentRefundedTopic, refundDeadLetter.Topic);
         Assert.Equal(payment.Id.ToString(), refundDeadLetter.MessageKey);
-        Assert.Equal(DeadLetterStatus.PendingRetry, refundDeadLetter.Status);
+        Assert.Equal(OutboxStatus.Pending, refundDeadLetter.Status);
 
         // Broker back: the US-03 retry processor delivers both dead letters unchanged.
         await using (var brokerUp = BuildServiceProvider(_kafka.GetBootstrapAddress()))
         {
             await using var scope = brokerUp.CreateAsyncScope();
-            Assert.Equal(2, await scope.ServiceProvider.GetRequiredService<IDeadLetterRetryProcessor>()
+            Assert.Equal(2, await scope.ServiceProvider.GetRequiredService<IOutboxRelayProcessor>()
                 .RunCycleAsync(CancellationToken.None));
         }
 
@@ -138,8 +138,8 @@ public class RefundFlowTests : IAsyncLifetime
 
         await using (var dbContext = CreateDbContext())
         {
-            var resolved = await dbContext.PaymentDeadLetters.AsNoTracking().SingleAsync(d => d.Id == refundDeadLetter.Id);
-            Assert.Equal(DeadLetterStatus.Resolved, resolved.Status);
+            var resolved = await dbContext.PaymentOutbox.AsNoTracking().SingleAsync(d => d.Id == refundDeadLetter.Id);
+            Assert.Equal(OutboxStatus.Published, resolved.Status);
         }
     }
 
@@ -221,14 +221,13 @@ public class RefundFlowTests : IAsyncLifetime
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+        services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
         services.AddSingleton<PaymentEventPublisher>();
-        services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
         services.AddScoped<ProcessPaymentHandler>();
         services.AddScoped<RefundPaymentHandler>();
-        services.AddScoped<IDeadLetterRetryProcessor, DeadLetterRetryProcessor>();
-        services.AddOptions<DeadLetterRetryOptions>();
+        services.AddScoped<IOutboxRelayProcessor, OutboxRelayProcessor>();
+        services.AddOptions<OutboxRelayOptions>();
         services
             .AddOptions<KafkaOptions>()
             .Configure(o =>
@@ -241,6 +240,7 @@ public class RefundFlowTests : IAsyncLifetime
                 o.PaymentFailedTopic = "payments.payment-failed";
                 o.PaymentRefundedTopic = PaymentRefundedTopic;
             });
+        services.AddOutboxRelay();
         services.AddSingleton<IHostedService, OrderPlacedConsumer>();
         services.AddSingleton<IHostedService, OrderCancelledConsumer>();
 

@@ -8,10 +8,9 @@ cannot block its partition (Constitution Principle VI).
 Design decision: [ADR 0005, Inbound dead-letter](adr/0005-inbound-dead-letter.md).
 Feature spec: [`specs/006-inbound-dead-letter`](../specs/006-inbound-dead-letter/spec.md) (US-06).
 
-This is **not** the outbound table. `payment_dead_letters` holds events Payments failed to
-*publish*, and the retry worker republishes those automatically
-([dead-letter-retry.md](dead-letter-retry.md)). Nothing replays `consumed_dead_letters`
-automatically.
+This is **not** the outbound table. `payment_outbox` holds every event Payments *publishes*,
+and the outbox relay delivers and retries those automatically ([outbox.md](outbox.md)).
+Nothing replays `consumed_dead_letters` automatically.
 
 ## What lands here
 

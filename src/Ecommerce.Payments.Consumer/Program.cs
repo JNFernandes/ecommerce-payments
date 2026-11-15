@@ -1,5 +1,5 @@
 using Ecommerce.Payments.Consumer.Consumers;
-using Ecommerce.Payments.Infrastructure.DeadLetters;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Service.Payments;
@@ -22,11 +22,11 @@ builder.Services
     .Bind(builder.Configuration.GetSection(PaymentPolicyOptions.SectionName));
 
 builder.Services
-    .AddOptions<DeadLetterRetryOptions>()
-    .Bind(builder.Configuration.GetSection(DeadLetterRetryOptions.SectionName))
+    .AddOptions<OutboxRelayOptions>()
+    .Bind(builder.Configuration.GetSection(OutboxRelayOptions.SectionName))
     .Validate(
         options => options.IsValid(),
-        "DeadLetterRetry settings must be positive and MaxDelayMs must be >= BaseDelayMs.")
+        "OutboxRelay settings must be positive and MaxDelayMs must be >= BaseDelayMs.")
     .ValidateOnStart();
 
 builder.Services
@@ -41,25 +41,25 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Payments")));
 
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
-builder.Services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
+builder.Services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
 // Per-order lock (ADR 0004) and cancellation markers (US-05).
 builder.Services.AddOrderPersistence();
 // Inbound messages that cannot be handled (US-06, ADR 0005).
 builder.Services.AddConsumedDeadLetterStore();
-// Singleton: the Kafka producer it wraps is designed to be long-lived and reused, not
-// recreated per message. One instance serves both the normal (dead-lettering) publish path and
-// the raw publish used by the dead-letter retry worker.
+// Transactional outbox (US-07, ADR 0006): handlers record events with the state change; only
+// the relay publishes, through the raw publisher. Singleton: the Kafka producer it wraps is
+// long-lived and reused.
+builder.Services.AddPaymentOutbox();
 builder.Services.AddSingleton<PaymentEventPublisher>();
-builder.Services.AddSingleton<IPaymentEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
 builder.Services.AddSingleton<IRawEventPublisher>(sp => sp.GetRequiredService<PaymentEventPublisher>());
 builder.Services.AddScoped<ProcessPaymentHandler>();
 builder.Services.AddScoped<RefundPaymentHandler>();
 
-builder.Services.AddScoped<IDeadLetterRetryProcessor, DeadLetterRetryProcessor>();
+builder.Services.AddScoped<IOutboxRelayProcessor, OutboxRelayProcessor>();
 
 builder.Services.AddHostedService<OrderPlacedConsumer>();
 builder.Services.AddHostedService<OrderCancelledConsumer>();
-builder.Services.AddHostedService<DeadLetterRetryWorker>();
+builder.Services.AddHostedService<OutboxRelayWorker>();
 
 var host = builder.Build();
 host.Run();

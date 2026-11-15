@@ -24,7 +24,7 @@ public class ProcessPaymentHandlerTests
 
     private static ProcessPaymentHandler CreateHandler(
         IPaymentRepository repository,
-        IPaymentEventPublisher publisher,
+        IPaymentOutbox publisher,
         decimal maxAmountThreshold = decimal.MaxValue,
         ICancellationMarkerRepository? markers = null,
         IOrderUnitOfWork? unitOfWork = null,
@@ -38,10 +38,10 @@ public class ProcessPaymentHandlerTests
             logger ?? NullLogger<ProcessPaymentHandler>.Instance);
 
     [Fact]
-    public async Task Should_Commit_Order_Transaction_Before_Publishing()
+    public async Task Should_Record_Outbox_Entry_Inside_Transaction_Before_Commit()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
         var calls = new List<string>();
         var unitOfWork = new RecordingOrderUnitOfWork(calls);
         var orderPlaced = ValidOrderPlaced();
@@ -54,21 +54,21 @@ public class ProcessPaymentHandlerTests
             .Callback(() => calls.Add("Save"))
             .Returns(Task.CompletedTask);
         publisher
-            .Setup(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()))
-            .Callback(() => calls.Add("Publish"))
+            .Setup(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()))
+            .Callback(() => calls.Add("Outbox:Processed"))
             .Returns(Task.CompletedTask);
 
         await CreateHandler(repository.Object, publisher.Object, unitOfWork: unitOfWork)
             .HandleAsync(orderPlaced, CancellationToken.None);
 
-        Assert.Equal([$"Begin:{orderPlaced.AggregateId}", "Save", "Commit", "Dispose", "Publish"], calls);
+        Assert.Equal([$"Begin:{orderPlaced.AggregateId}", "Save", "Outbox:Processed", "Commit", "Dispose"], calls);
     }
 
     [Fact]
     public async Task HandleAsync_ValidOrderPlaced_CallsRepositoryThenPublisherInOrder()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
         var callOrder = new List<string>();
 
         repository
@@ -79,7 +79,7 @@ public class ProcessPaymentHandlerTests
             .Callback(() => callOrder.Add("Repository"))
             .Returns(Task.CompletedTask);
         publisher
-            .Setup(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()))
+            .Setup(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("Publisher"))
             .Returns(Task.CompletedTask);
 
@@ -89,14 +89,14 @@ public class ProcessPaymentHandlerTests
 
         Assert.Equal(["Repository", "Publisher"], callOrder);
         repository.Verify(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Once);
-        publisher.Verify(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Once);
+        publisher.Verify(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
     public async Task HandleAsync_RepositoryThrows_NeverCallsPublisher()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
 
         repository
             .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -110,15 +110,15 @@ public class ProcessPaymentHandlerTests
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => handler.HandleAsync(ValidOrderPlaced(), CancellationToken.None));
 
-        publisher.Verify(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
-        publisher.Verify(p => p.PublishFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()), Times.Never);
+        publisher.Verify(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
+        publisher.Verify(p => p.AddFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task HandleAsync_RepositoryThrowsPersistently_RetriesThenThrowsWithoutCallingPublisher()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
         var attempts = 0;
 
         repository
@@ -135,14 +135,14 @@ public class ProcessPaymentHandlerTests
             () => handler.HandleAsync(ValidOrderPlaced(), CancellationToken.None));
 
         Assert.True(attempts > 1, "Expected the handler to retry the save before giving up.");
-        publisher.Verify(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
+        publisher.Verify(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task HandleAsync_PaymentAlreadyExistsForOrder_SkipsAsNoOp()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
 
         repository
             .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -153,14 +153,14 @@ public class ProcessPaymentHandlerTests
         await handler.HandleAsync(ValidOrderPlaced(), CancellationToken.None);
 
         repository.Verify(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
-        publisher.Verify(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
+        publisher.Verify(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task HandleAsync_AmountAboveThreshold_PublishesFailedNotProcessedAndDoesNotLogAsError()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
         var orderPlaced = ValidOrderPlaced();
 
         repository
@@ -170,22 +170,22 @@ public class ProcessPaymentHandlerTests
             .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         publisher
-            .Setup(p => p.PublishFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()))
+            .Setup(p => p.AddFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var handler = CreateHandler(repository.Object, publisher.Object, maxAmountThreshold: orderPlaced.TotalAmount - 1m);
 
         await handler.HandleAsync(orderPlaced, CancellationToken.None);
 
-        publisher.Verify(p => p.PublishFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()), Times.Once);
-        publisher.Verify(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
+        publisher.Verify(p => p.AddFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()), Times.Once);
+        publisher.Verify(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task HandleAsync_AmountAtOrBelowThreshold_PublishesProcessedNotFailed()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
         var orderPlaced = ValidOrderPlaced();
 
         repository
@@ -195,22 +195,22 @@ public class ProcessPaymentHandlerTests
             .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         publisher
-            .Setup(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()))
+            .Setup(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var handler = CreateHandler(repository.Object, publisher.Object, maxAmountThreshold: orderPlaced.TotalAmount);
 
         await handler.HandleAsync(orderPlaced, CancellationToken.None);
 
-        publisher.Verify(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Once);
-        publisher.Verify(p => p.PublishFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()), Times.Never);
+        publisher.Verify(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Once);
+        publisher.Verify(p => p.AddFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task Should_Not_Create_Or_Publish_Payment_When_Order_Has_Cancellation_Marker()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
         var markers = new Mock<ICancellationMarkerRepository>();
         var unitOfWork = new RecordingOrderUnitOfWork();
         var logger = new ListLogger<ProcessPaymentHandler>();
@@ -229,8 +229,8 @@ public class ProcessPaymentHandlerTests
             .HandleAsync(orderPlaced, CancellationToken.None);
 
         repository.Verify(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
-        publisher.Verify(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
-        publisher.Verify(p => p.PublishFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()), Times.Never);
+        publisher.Verify(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Never);
+        publisher.Verify(p => p.AddFailedAsync(It.IsAny<PaymentFailed>(), It.IsAny<CancellationToken>()), Times.Never);
         Assert.Equal(0, unitOfWork.Commits);
         var (level, message) = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Information, level);
@@ -244,7 +244,7 @@ public class ProcessPaymentHandlerTests
     public async Task Should_Check_Payment_Before_Marker()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
         var markers = new Mock<ICancellationMarkerRepository>();
 
         repository
@@ -262,7 +262,7 @@ public class ProcessPaymentHandlerTests
     public async Task Should_Process_Normally_When_No_Marker()
     {
         var repository = new Mock<IPaymentRepository>();
-        var publisher = new Mock<IPaymentEventPublisher>();
+        var publisher = new Mock<IPaymentOutbox>();
         var markers = new Mock<ICancellationMarkerRepository>();
         var orderPlaced = ValidOrderPlaced();
 
@@ -278,6 +278,6 @@ public class ProcessPaymentHandlerTests
 
         markers.Verify(m => m.GetByOrderIdAsync(orderPlaced.AggregateId, It.IsAny<CancellationToken>()), Times.Once);
         repository.Verify(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Once);
-        publisher.Verify(p => p.PublishAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Once);
+        publisher.Verify(p => p.AddProcessedAsync(It.IsAny<PaymentProcessed>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

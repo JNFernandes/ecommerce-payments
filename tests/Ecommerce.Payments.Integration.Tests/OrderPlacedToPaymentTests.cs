@@ -1,5 +1,6 @@
 using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Domain.Payments;
+using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
 using Ecommerce.Payments.Service.Payments;
@@ -46,8 +47,8 @@ public class OrderPlacedToPaymentTests : IAsyncLifetime
         Assert.Equal("USD", saved.Currency);
         Assert.NotNull(saved.ProcessedAt);
 
-        var publisher = (FakePaymentEventPublisher)provider.GetRequiredService<IPaymentEventPublisher>();
-        Assert.Single(publisher.Published, p => p.OrderId == orderId);
+        var outbox = provider.GetRequiredService<OutboxReader>();
+        Assert.Single(outbox.Processed, p => p.OrderId == orderId);
     }
 
     private ServiceProvider BuildServiceProvider()
@@ -57,7 +58,8 @@ public class OrderPlacedToPaymentTests : IAsyncLifetime
         services.AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(_postgres.GetConnectionString()));
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddOrderPersistence();
-        services.AddSingleton<IPaymentEventPublisher, FakePaymentEventPublisher>();
+        services.AddPaymentOutbox();
+        services.AddSingleton<OutboxReader>();
         services.AddScoped<ProcessPaymentHandler>();
         services
             .AddOptions<KafkaOptions>()

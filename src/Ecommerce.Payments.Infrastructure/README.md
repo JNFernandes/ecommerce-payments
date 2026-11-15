@@ -2,19 +2,19 @@
 
 **Layers**: Repository + Publisher (per the
 [Constitution](../../.specify/memory/constitution.md)'s
-Consumer → Service → Domain → Repository → Publisher flow), plus the dead-letter retry worker
+Consumer → Service → Domain → Repository → Publisher flow), plus the outbox relay
 
 ## Responsibility
 
 Outward-facing adapters, kept in separate folders/namespaces and never referenced from Domain:
 
 - **`Persistence/`** (Repository) — `PaymentsDbContext` (EF Core + PostgreSQL),
-  `PaymentEntity`/`PaymentDeadLetterEntity` (persistence models, mapped explicitly to/from
+  `PaymentEntity`/`OutboxEntryEntity` (persistence models, mapped explicitly to/from
   the `Payment` domain aggregate — EF Core types never leak into Domain),
   `PaymentRepository` (implements `IPaymentRepository`; the `payments.order_id` unique
-  index is the durable idempotency guarantee; `GetByOrderIdAsync` rehydrates the aggregate and `SaveRefundAsync` is a conditional update that only succeeds while the payment is still Processed), and `PaymentDeadLetterRepository`
-  (implements `IPaymentDeadLetterRepository`; the single owner of `payment_dead_letters`,
-  including the `FOR UPDATE SKIP LOCKED` claim query).
+  index is the durable idempotency guarantee; `GetByOrderIdAsync` rehydrates the aggregate and `SaveRefundAsync` is a conditional update that only succeeds while the payment is still Processed), and `PaymentOutboxRepository`
+  (implements `IPaymentOutboxRepository`; relay-side access to `payment_outbox`,
+  including the per-payment ordered `FOR UPDATE SKIP LOCKED` claim query).
 
   US-05 adds the following:
   - `CancellationMarkerEntity` and `CancellationMarkerRepository`: the
@@ -35,19 +35,19 @@ Outward-facing adapters, kept in separate folders/namespaces and never reference
 
   The Consumer host's `KafkaConsumerBase` uses the store for inbound messages that are malformed
   or keep failing ([docs/consumed-dead-letters.md](../../docs/consumed-dead-letters.md)).
-- **`Messaging/`** (Publisher) — `PaymentEventPublisher` (implements
-  `IPaymentEventPublisher` and `IRawEventPublisher`; Confluent.Kafka producer). On a publish
-  failure *after* a successful save, it writes the event to `payment_dead_letters` (with its
-  topic, key and retry bookkeeping) instead of losing it, rather than rolling back the
-  already-correct `Payment` row. `IRawEventPublisher.PublishRawAsync` publishes an
-  already-serialized message and throws on failure without dead-lettering — used by both the
-  normal path and the retry worker.
-- **`DeadLetters/`** — `DeadLetterRetryWorker` (hosted service, registered by the Consumer
-  host), `DeadLetterRetryProcessor` (one cycle: claim → republish → update, one transaction
-  per row), `DeadLetterRetryPolicy` (pure backoff/exhaustion rules) and
-  `DeadLetterRetryOptions` (`DeadLetterRetry` config section). See
-  [docs/dead-letter-retry.md](../../docs/dead-letter-retry.md) and
-  [ADR 0003](../../docs/adr/0003-dead-letter-retry.md).
+- **`Messaging/`** (Publisher): `PaymentEventPublisher` implements `IRawEventPublisher` with
+  the Confluent.Kafka producer (`MessageTimeoutMs` 10 s). It publishes an already-serialized
+  outbox entry unchanged and throws on failure. Only the outbox relay calls it (US-07).
+- **`Outbox/`**: the transactional outbox (US-07,
+  [ADR 0006](../../docs/adr/0006-transactional-outbox.md), [docs/outbox.md](../../docs/outbox.md)).
+  - `PaymentOutbox` implements the Service port `IPaymentOutbox`. It builds and serializes the
+    integration event (new `eventId`) and adds a `Pending` entry to `payment_outbox` in the
+    caller's per-order transaction. It is registered with `AddPaymentOutbox()`.
+  - `OutboxRelayWorker` is the hosted service, registered by the Consumer host.
+  - `OutboxRelayProcessor` runs one cycle: claim, then publish, then update, one transaction
+    per entry, in order per payment.
+  - `OutboxRetryPolicy` holds the pure backoff and exhaustion rules.
+  - `OutboxRelayOptions` maps the `OutboxRelay` config section.
 
 ## Topics
 
@@ -57,7 +57,7 @@ Outward-facing adapters, kept in separate folders/namespaces and never reference
 | Publishes | `payments.payment-failed` | `PaymentFailed` |
 | Publishes | `payments.payment-refunded` | `PaymentRefunded` |
 
-Dead-lettered events are republished to the same topic, unchanged.
+Every event is recorded in `payment_outbox` with its payment change and published by the relay, unchanged.
 
 ## Migrations
 

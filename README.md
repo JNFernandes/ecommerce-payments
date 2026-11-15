@@ -19,10 +19,10 @@ Consumer → Service → Domain → Repository → Publisher
 | Layer | Project | Responsibility |
 |---|---|---|
 | Consumer | `Ecommerce.Payments.Consumer` | Kafka `IHostedService` consumers, deserializes `OrderPlaced`, delegates to Service, owns offset commits. |
-| Service | `Ecommerce.Payments.Service` | Orchestrates Domain → Repository → Publisher, in that exact order. No business rules. |
+| Service | `Ecommerce.Payments.Service` | Orchestrates Domain → Repository: saves the payment change and its outbox entry in one transaction; never publishes. No business rules. |
 | Domain | `Ecommerce.Payments.Domain` | `Payment` aggregate root: all business rules and state transitions (`Process()`, `Fail(reason)`, `Evaluate(...)`). Plain C#, no infrastructure dependencies. |
-| Repository | `Ecommerce.Payments.Infrastructure/Persistence` | EF Core + PostgreSQL persistence behind `IPaymentRepository`. |
-| Publisher | `Ecommerce.Payments.Infrastructure/Messaging` | Confluent.Kafka producer behind `IPaymentEventPublisher`. |
+| Repository | `Ecommerce.Payments.Infrastructure/Persistence` | EF Core + PostgreSQL persistence behind `IPaymentRepository` and `IPaymentOutbox` (`payment_outbox`). |
+| Publisher | `Ecommerce.Payments.Infrastructure/Messaging` | Confluent.Kafka producer behind `IRawEventPublisher`, called only by the outbox relay (US-07). |
 
 Payments is its own bounded context with its own PostgreSQL database: it has no `Order` model
 and keeps only `orderId`, `customerId` and the amount from the event
@@ -30,10 +30,17 @@ and keeps only `orderId`, `customerId` and the amount from the event
 order/payment saga by choreography — there is no central orchestrator
 ([ADR 0002](docs/adr/0002-saga-by-choreography.md)).
 
-**Write flow invariant:** the `Payment` row is always saved to PostgreSQL *before* any Kafka
-event is published. If the DB save fails, the message is retried and nothing is published. If
-the publish fails after a successful save, the event is written to a `payment_dead_letters`
-table instead of being lost, and the offset is still committed.
+**Write flow invariant (transactional outbox, US-07):**
+- The payment change and its event (`PaymentProcessed`, `PaymentFailed` or `PaymentRefunded`)
+  are saved to PostgreSQL in **one transaction**. The event goes to the `payment_outbox` table.
+- The handler never publishes. The offset is committed once that transaction has committed.
+- The **outbox relay** then publishes the recorded event unchanged, retrying with backoff if
+  Kafka is unavailable.
+- If the save fails, nothing is saved, nothing is published, and the message is retried.
+- A crash at any point loses no event, and events for one payment are published in the order
+  they happened.
+
+See [docs/outbox.md](docs/outbox.md) and [ADR 0006](docs/adr/0006-transactional-outbox.md).
 
 Processing is idempotent: redelivering the same `OrderPlaced` message never creates a
 duplicate `Payment` or a duplicate published event (the order's `aggregateId` is the
@@ -44,10 +51,12 @@ idempotency key).
 ```
 ecommerce-orders                         ecommerce-payments
 ────────────────                         ──────────────────
-OrderPlaced    ── orders.order-placed ──▶  create Payment → save → publish
+OrderPlaced    ── orders.order-placed ──▶  create Payment → save payment + outbox entry ─┐
+OrderCancelled ── orders.order-cancelled ─▶ refund a Processed payment → save + entry ─┤
+                                                                                        ▼
+                                            outbox relay publishes, in order per payment:
                                             ├─ payments.payment-processed ──▶ Orders confirms order
-                                            └─ payments.payment-failed    ──▶ Orders cancels order
-OrderCancelled ── orders.order-cancelled ─▶ refund a Processed payment → save → publish
+                                            ├─ payments.payment-failed    ──▶ Orders cancels order
                                             └─ payments.payment-refunded
 ```
 
@@ -110,8 +119,10 @@ How to list and replay stored messages:
   removes them. A parked `OrderCancelled` leaves its payment `Processed` until it is replayed.
 - The consumer keeps its attempt count in memory, so after a restart the count for a failing
   message starts again.
-- If the process crashes after a refund (or payment) is saved but before its event is published
-  or dead-lettered, that event is lost — there is no transactional outbox.
+- An `Exhausted` outbox entry holds back later events for the same payment until it is re-queued
+  ([docs/outbox.md](docs/outbox.md)). Published outbox entries are kept and never cleaned up.
+- Upgrading to US-07: stop the service, run the migration (`payment_dead_letters` becomes
+  `payment_outbox`), then start it. The `DeadLetterRetry` settings section is now `OutboxRelay`.
 - Cancellation markers are never expired. Early cancellations that US-04 ignored before US-05
   shipped are not backfilled.
 - `OrderPlacedConsumer` deduplicates by order id rather than by `eventId` (predates
@@ -122,8 +133,8 @@ How to list and replay stored messages:
 | Hosted service | Responsibility | Status |
 |---|---|---|
 | `OrderPlacedConsumer` | Consumes `orders.order-placed` and runs the payment write flow. It skips orders that have a cancellation marker (US-05). Messages that are malformed or keep failing go to `consumed_dead_letters` (US-06). | Implemented |
-| `DeadLetterRetryWorker` | Every `DeadLetterRetry:IntervalMs`, republishes due `payment_dead_letters` rows unchanged (same topic, key and `eventId`) with exponential backoff, marking them `Resolved` or `Exhausted` after `MaxRetries`; claims rows with `FOR UPDATE SKIP LOCKED` so several instances are safe. See [docs/dead-letter-retry.md](docs/dead-letter-retry.md) and [ADR 0003](docs/adr/0003-dead-letter-retry.md). | Implemented (US-03) |
-| `OrderCancelledConsumer` | Consumes `orders.order-cancelled`. Refunds the order's `Processed` payment and publishes `PaymentRefunded`, dead-lettering it if the publish fails. Failed, Pending or already Refunded payments are ignored with an Information log. With no payment, it records a cancellation marker (US-05). Messages that are malformed or keep failing go to `consumed_dead_letters` (US-06). | Implemented (US-04, US-05, US-06) |
+| `OutboxRelayWorker` | Every `OutboxRelay:PollIntervalMs` (250 ms) it publishes due `payment_outbox` entries unchanged (same topic, key and `eventId`), in recording order per payment. It retries failures with exponential backoff and marks an entry `Exhausted` after `MaxRetries`. Entries are claimed with `FOR UPDATE SKIP LOCKED`, so several instances are safe. See [docs/outbox.md](docs/outbox.md) and [ADR 0006](docs/adr/0006-transactional-outbox.md). | Implemented (US-03, US-07) |
+| `OrderCancelledConsumer` | Consumes `orders.order-cancelled`. Refunds the order's `Processed` payment and records `PaymentRefunded` in the outbox with the refund (US-07). Failed, Pending or already Refunded payments are ignored with an Information log. With no payment, it records a cancellation marker (US-05). Messages that are malformed or keep failing go to `consumed_dead_letters` (US-06). | Implemented (US-04, US-05, US-06) |
 
 ## Project layout
 
@@ -132,7 +143,7 @@ src/
   Ecommerce.Payments.Consumer/        Worker Service host, Kafka consumers
   Ecommerce.Payments.Service/         Application/handler layer
   Ecommerce.Payments.Domain/          Payment aggregate, domain events, business rules
-  Ecommerce.Payments.Infrastructure/  EF Core repositories, Kafka publisher, dead-letter retry worker, migrations
+  Ecommerce.Payments.Infrastructure/  EF Core repositories, outbox and its relay, Kafka publisher, migrations
 tests/
   Ecommerce.Payments.Domain.Tests/          Unit tests, no infrastructure
   Ecommerce.Payments.Service.Tests/         Unit tests with mocked Repository/Publisher
@@ -141,7 +152,7 @@ tests/
   Ecommerce.Payments.Component.Tests/    Full flow against Testcontainers Postgres + Kafka
 docs/
   adr/                                Architecture Decision Records
-  dead-letter-retry.md                Dead-letter states, settings, example SQL
+  outbox.md                           Outbox: states, settings, ordering, re-queue, upgrade
   consumed-dead-letters.md            Inbound dead letters: what lands there, listing, replay
 specs/
   NNN-feature-name/                   Spec-Kit artifacts (spec, plan, tasks) per user story
@@ -229,12 +240,12 @@ dotnet test
 | `Kafka:ConsumerMaxAttempts` | Failed attempts before an inbound message is stored in `consumed_dead_letters` and committed (default `5`, [ADR 0005](docs/adr/0005-inbound-dead-letter.md)) |
 | `PaymentPolicy:MaxAmountThreshold` | Amount above which a payment fails instead of processing |
 | `Persistence:OrderLockTimeoutMs` | Maximum wait for the per-order lock before the attempt fails and is retried (default `5000`, [ADR 0004](docs/adr/0004-per-order-serialisation.md)) |
-| `DeadLetterRetry:IntervalMs` | Time between dead-letter retry cycles (default `30000`) |
-| `DeadLetterRetry:BatchSize` | Maximum rows retried per cycle (default `20`) |
-| `DeadLetterRetry:BaseDelayMs` / `DeadLetterRetry:MaxDelayMs` | Exponential backoff base and cap (defaults `5000` / `600000`) |
-| `DeadLetterRetry:MaxRetries` | Failed retries before a row is `Exhausted` (default `8`) |
+| `OutboxRelay:PollIntervalMs` | Time between outbox relay cycles (default `250`) |
+| `OutboxRelay:BatchSize` | Maximum entries published per cycle (default `100`) |
+| `OutboxRelay:BaseDelayMs` / `OutboxRelay:MaxDelayMs` | Exponential backoff base and cap after a failed publish (defaults `5000` / `600000`) |
+| `OutboxRelay:MaxRetries` | Failed attempts before an entry is `Exhausted` (default `8`) |
 
-Details: [docs/dead-letter-retry.md](docs/dead-letter-retry.md).
+Details: [docs/outbox.md](docs/outbox.md).
 
 ## Workflow
 
