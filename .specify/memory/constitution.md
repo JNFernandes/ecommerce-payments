@@ -1,43 +1,36 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.0.0 → 1.1.0 (MINOR — materially expanded guidance, no principle removed or
-redefined)
+Version change: 1.1.0 → 1.2.0 (MINOR — materially expanded guidance; one rule narrowed, no
+principle removed or redefined)
 
 Modified principles:
-- I. Domain-Driven Design & Layered Architecture — Domain: added `REFUNDED` status,
-  `Payment.Refund()`, `PaymentRefunded` domain event and the "refund only from Processed" rule.
-- II. Event-Driven Write Flow Integrity — write flow now also applies to `OrderCancelled`;
-  idempotency clarified (dedupe by `eventId`, order identified by `aggregateId`).
-- VI. Kafka Consumption & Event Publishing — consumption of `orders.order-cancelled`;
-  `PaymentRefunded` → `payments.payment-refunded`; payment events carry `aggregateId` = payment
-  id plus a separate `orderId`; refund rules; dead-letter retry worker; startup independence
-  from Kafka.
+- II. Event-Driven Write Flow Integrity — added the cancellation-marker write (`OrderCancelled`
+  with no payment) and the "no payment for a marked order" rule to the idempotency guarantees.
+- VI. Kafka Consumption & Event Publishing — "Refund rules": an `OrderCancelled` whose payment
+  is not found no longer means "no state change"; it records a cancellation marker. `FAILED`
+  and `REFUNDED` handling unchanged.
 
 Added sections:
-- VI → "Refund rules", "Dead-letter retry", "Startup & broker availability" subsections.
+- VI → "Cancellation markers" subsection (one marker per order enforced by a unique
+  constraint; marked orders are never charged and get no payment event; marker and payment
+  creation for the same order are mutually exclusive under concurrency; dedupe by `eventId`).
 
 Removed sections: none.
 
-Other changes:
-- Technology Stack: added "Local infrastructure: ecommerce-infra (docker compose)".
-- Documentation Standards: `OrderCancelled` consumed, `PaymentRefunded` published; every new
-  background service documented in the project README.
-
 Templates / runtime docs:
-- ✅ .specify/templates/plan-template.md — "Constitution Check" gates are derived from this file
-  at plan time; no hard-coded principles to update.
-- ✅ .specify/templates/spec-template.md — no constitution-specific constraints; no change.
-- ✅ .specify/templates/tasks-template.md — generic task categories; no change.
-- ✅ .specify/templates/commands/*.md — directory not present in this repo; nothing to check.
-- ✅ README.md — updated in a separate commit (architecture, event flow, ecommerce-infra).
-- ✅ CLAUDE.md — added in a separate commit, aligned with v1.1.0.
-- ⚠ specs/ — existing feature specs (001, 002) intentionally not modified; US-03 / US-04 specs
-  will be written against v1.1.0.
+- ✅ .specify/templates/plan-template.md — Constitution Check derived at plan time; no change.
+- ✅ .specify/templates/spec-template.md — no change.
+- ✅ .specify/templates/tasks-template.md — no change.
+- ✅ .specify/templates/commands/*.md — directory not present in this repo.
+- ✅ CLAUDE.md — version reference and refund/marker rules updated to v1.2.0.
+- ⚠ README.md — "Known limitations" entry about a cancellation arriving before its payment
+  stays until US-05 is implemented (it still describes the code on `main`).
+- ⚠ specs/004-refund-on-order-cancelled — written against v1.1.0; intentionally not modified.
 
 Follow-up TODOs:
-- Code does not yet implement v1.1.0 additions (OrderCancelled consumer, Refund, dead-letter
-  retry worker + new dead-letter columns, Kafka-independent startup). Tracked by US-03 and US-04.
+- Code does not yet implement cancellation markers. Tracked by US-05
+  (specs/005-cancellation-marker).
 -->
 
 # ecommerce-payments Constitution
@@ -124,7 +117,9 @@ The write flow MUST follow this exact sequence and MUST NOT deviate:
 
 The same sequence applies to `OrderCancelled` from `orders.order-cancelled`: Domain executes
 `Payment.Refund()` and raises `PaymentRefunded`, the Repository saves first, and only then is
-`PaymentRefunded` published to `payments.payment-refunded`.
+`PaymentRefunded` published to `payments.payment-refunded`. An `OrderCancelled` for an order
+with no payment instead records a cancellation marker (Principle VI "Cancellation markers");
+that write publishes nothing, and the offset is committed only after it is saved.
 
 **Failure handling:**
 - If the DB save (step 4) fails: **no Kafka publish MUST occur.** Log the error with full
@@ -143,6 +138,8 @@ The same sequence applies to `OrderCancelled` from `orders.order-cancelled`: Dom
   apply a duplicate state transition, or publish a duplicate event.
 - In order events the order is identified by `aggregateId` (the order id). At most one `Payment`
   exists per order: the order's `aggregateId` is the idempotency key for payment creation.
+- No `Payment` is ever created for an order that has a cancellation marker, and no marker is
+  created for an order that has a `Payment` (Principle VI "Cancellation markers").
 - Consumers MUST deduplicate redelivered messages by the inbound event's `eventId`, checked by
   the Service/Repository before domain execution.
 
@@ -233,9 +230,27 @@ This service is **both a consumer and a producer** of domain/integration events.
 
 **Refund rules:**
 - A payment MAY only be refunded from the `PROCESSED` state (Principle I).
-- A refund request (`OrderCancelled`) for a payment that is `FAILED`, already `REFUNDED`, or not
-  found MUST be ignored: logged with full context, offset committed, no state change, no event
-  published. It MUST NEVER throw out of the Consumer/Service path.
+- A refund request (`OrderCancelled`) for a payment that is `FAILED` or already `REFUNDED` MUST
+  be ignored: logged with full context, offset committed, no state change, no event published.
+- A refund request for an order with no payment MUST record a cancellation marker (see below):
+  logged, offset committed after the marker is saved, no event published.
+- None of these cases may ever throw out of the Consumer/Service path.
+
+**Cancellation markers:**
+- `OrderCancelled` and `OrderPlaced` arrive on different topics with no relative ordering, so a
+  cancellation can arrive before the order's payment exists. The marker records that the order
+  was cancelled: order id, cancelling `eventId`, cancellation time, recorded time, optional
+  reason.
+- At most one marker MUST exist per order, enforced by a unique constraint in PostgreSQL.
+- An `OrderPlaced` for an order that has a marker MUST NOT create, evaluate or save a `Payment`
+  and MUST NOT publish any event (neither `PaymentProcessed` nor `PaymentFailed`); it is logged
+  and its offset committed.
+- Marker creation and payment creation for the same order MUST be mutually exclusive under
+  concurrency: whichever is committed first wins and the other then observes it. The service
+  MUST never end with a `PROCESSED`, unrefunded payment for a marked order, nor create a payment
+  after the order's marker exists. Losing this race is a normal outcome, not an error.
+- Markers deduplicate redelivered cancellations by `eventId` (Principle II). Markers are not
+  expired or removed.
 
 **Dead-letter retry:**
 - Dead-letter rows MUST carry: `status` (`PendingRetry`, `Resolved`, `Exhausted`), retry count,
@@ -366,4 +381,4 @@ note if existing code must change.
 Reviewers are empowered to block merges for violations without exception. New principles take
 effect immediately upon merge.
 
-**Version**: 1.1.0 | **Ratified**: 2026-07-08 | **Last Amended**: 2026-11-12
+**Version**: 1.2.0 | **Ratified**: 2026-07-08 | **Last Amended**: 2026-11-15

@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Guidance for Claude Code in this repository. The source of truth for every rule here is
-`.specify/memory/constitution.md` (v1.1.0); if this file and the constitution disagree, the
+`.specify/memory/constitution.md` (v1.2.0); if this file and the constitution disagree, the
 constitution wins. Architectural decisions live in `docs/adr/`.
 
 ## Stack
@@ -107,8 +107,12 @@ in the background.
 - Every published payment event carries `eventId`, `occurredAt`, `aggregateId` = the **payment**
   id, `version`, and a separate `orderId` = the order id. Downstream consumers must use
   `orderId` to identify the order.
-- Refunds only from `Processed`. A refund request for a `Failed`, already `Refunded` or unknown
-  payment is logged and ignored (offset committed) — it never throws.
+- Refunds only from `Processed`. A refund request for a `Failed` or already `Refunded` payment
+  is logged and ignored (offset committed) — it never throws.
+- A cancellation for an order with **no payment** records a cancellation marker (one per order,
+  unique constraint). An `OrderPlaced` for a marked order creates no payment and publishes
+  nothing. Marker and payment creation for the same order must be mutually exclusive under
+  concurrency (constitution v1.2.0, Principle VI "Cancellation markers").
 - JSON payloads; breaking changes need a new topic version (e.g. `payments.payment-processed.v2`).
 - Event classes carry XML doc comments on every field.
 
