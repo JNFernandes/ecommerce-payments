@@ -45,6 +45,50 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                     b.ToTable("order_cancellation_markers", (string)null);
                 });
 
+            modelBuilder.Entity("Ecommerce.Payments.Infrastructure.Persistence.Entities.ConsumedDeadLetterEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Error")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("FailedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("MessageKey")
+                        .HasColumnType("text");
+
+                    b.Property<long>("Offset")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("Partition")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Payload")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Topic")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Topic", "Partition", "Offset")
+                        .IsUnique()
+                        .HasDatabaseName("IX_consumed_dead_letters_position");
+
+                    b.ToTable("consumed_dead_letters", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_consumed_dead_letters_attempts", "\"Attempts\" >= 1");
+                        });
+                });
+
             modelBuilder.Entity("Ecommerce.Payments.Infrastructure.Persistence.Entities.PaymentDeadLetterEntity", b =>
                 {
                     b.Property<Guid>("Id")

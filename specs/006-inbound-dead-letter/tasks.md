@@ -45,25 +45,25 @@ consumer key change. Behaviour does not change yet.
 
 **⚠️ CRITICAL**: no user story work can begin until this phase is complete.
 
-- [ ] T001 [P] Create `ConsumedDeadLetterEntity` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/Entities/ConsumedDeadLetterEntity.cs`.
+- [X] T001 [P] Create `ConsumedDeadLetterEntity` **(new)** in `src/Ecommerce.Payments.Infrastructure/Persistence/Entities/ConsumedDeadLetterEntity.cs`.
   - Properties, each with an XML doc: `Id` (`Guid`), `Topic` (`string`), `Partition` (`int`), `Offset` (`long`), `MessageKey` (`string?`), `Payload` (`string?`), `Error` (`string`), `Attempts` (`int`), `FailedAt` (`DateTimeOffset`).
   - In `src/Ecommerce.Payments.Infrastructure/Persistence/PaymentsDbContext.cs`:
     - add `DbSet<ConsumedDeadLetterEntity> ConsumedDeadLetters`;
     - map it with `ToTable("consumed_dead_letters", t => t.HasCheckConstraint("CK_consumed_dead_letters_attempts", "\"Attempts\" >= 1"))` and `HasKey(d => d.Id)`;
     - add a unique index on `{ Topic, Partition, Offset }` named `IX_consumed_dead_letters_position`;
     - update the class XML doc.
-- [ ] T002 Generate the migration `AddConsumedDeadLetters`, depending on T001:
+- [X] T002 Generate the migration `AddConsumedDeadLetters`, depending on T001:
   - run `dotnet ef migrations add AddConsumedDeadLetters --project src/Ecommerce.Payments.Infrastructure --startup-project src/Ecommerce.Payments.Infrastructure --output-dir Persistence/Migrations`;
   - run `dotnet format`;
   - verify the migration only creates the table, the unique index and the check constraint.
-- [ ] T003 Create the store, depending on T001:
+- [X] T003 Create the store, depending on T001:
   - **Record (new)**: `public sealed record ConsumedDeadLetter(string Topic, int Partition, long Offset, string? MessageKey, string? Payload, string Error, int Attempts)` in `src/Ecommerce.Payments.Infrastructure/Persistence/ConsumedDeadLetter.cs`, with XML docs.
   - **Interface (new)**: `IConsumedDeadLetterStore` in `src/Ecommerce.Payments.Infrastructure/Persistence/IConsumedDeadLetterStore.cs`, with `Task StoreAsync(ConsumedDeadLetter deadLetter, CancellationToken)`. Its doc says the call is idempotent per position, the caller commits the offset only after it returns, and it throws when the row could not be stored.
   - **Implementation (new)**: `ConsumedDeadLetterStore(PaymentsDbContext, TimeProvider)` in `src/Ecommerce.Payments.Infrastructure/Persistence/ConsumedDeadLetterStore.cs`.
     - It runs `ExecuteSqlAsync($"INSERT INTO consumed_dead_letters (\"Id\",\"Topic\",\"Partition\",\"Offset\",\"MessageKey\",\"Payload\",\"Error\",\"Attempts\",\"FailedAt\") VALUES (...) ON CONFLICT (\"Topic\",\"Partition\",\"Offset\") DO NOTHING")`, with every value parameterised.
     - `Id` is `Guid.NewGuid()` and `FailedAt` is `TimeProvider.GetUtcNow()`.
   - Add `services.AddConsumedDeadLetterStore()` (scoped) to a new `src/Ecommerce.Payments.Infrastructure/Persistence/ConsumedDeadLetterServiceCollectionExtensions.cs`.
-- [ ] T004 [P] Integration tests **(new)**, on a PostgreSQL container with migrations applied, depending on T002 and T003:
+- [X] T004 [P] Integration tests **(new)**, on a PostgreSQL container with migrations applied, depending on T002 and T003:
   - In `tests/Ecommerce.Payments.Integration.Tests/ConsumedDeadLetterStoreTests.cs`:
     - `Stores_Every_Field_As_Received`. Use a non-JSON payload, a null key and a `FakeTimeProvider` starting on whole seconds.
     - `Storing_Same_Position_Twice_Keeps_One_Row`. The second call does not throw, and the first row's values are kept.
@@ -72,16 +72,16 @@ consumer key change. Behaviour does not change yet.
   - In `tests/Ecommerce.Payments.Integration.Tests/ConsumedDeadLetterMigrationTests.cs`:
     - the table and the unique index exist;
     - a raw insert with `Attempts = 0` violates the check constraint (SqlState `23514`).
-- [ ] T005 [P] Add the setting and its validation:
+- [X] T005 [P] Add the setting and its validation:
   - Add `ConsumerMaxAttempts` (default 5) to `src/Ecommerce.Payments.Infrastructure/Messaging/KafkaOptions.cs`, with an XML doc: "failed handling attempts before a message is stored in `consumed_dead_letters` and committed; > 0".
   - In `src/Ecommerce.Payments.Consumer/Program.cs`, chain `.Validate(o => o.ConsumerMaxAttempts > 0 && o.ConsumerRetryBaseDelayMs > 0 && o.ConsumerRetryMaxDelayMs >= o.ConsumerRetryBaseDelayMs, "Kafka consumer retry settings must be positive and ConsumerRetryMaxDelayMs >= ConsumerRetryBaseDelayMs.").ValidateOnStart()` onto `AddOptions<KafkaOptions>()`, and register `AddConsumedDeadLetterStore()`.
   - Add `"ConsumerMaxAttempts": 5` to the `Kafka` section of `src/Ecommerce.Payments.Consumer/appsettings.json`.
 
   Depends on T003 for the DI line.
-- [ ] T006 [P] Create `InvalidMessageException` **(new)** in `src/Ecommerce.Payments.Consumer/Consumers/InvalidMessageException.cs`.
+- [X] T006 [P] Create `InvalidMessageException` **(new)** in `src/Ecommerce.Payments.Consumer/Consumers/InvalidMessageException.cs`.
   - `public sealed class InvalidMessageException : Exception` with constructor `(string reason)`, a `Reason` property, and the message `"Malformed message: {reason}"`.
   - XML doc: thrown by a consumer's `HandleMessageAsync` for an envelope that can never be handled; `KafkaConsumerBase` stores it with attempts 1 and does not retry it.
-- [ ] T007 In `src/Ecommerce.Payments.Consumer/Consumers/KafkaConsumerBase.cs`, change the consumer to `IConsumer<string?, string?>`, built with `ConsumerBuilder<string?, string?>`. Pass `consumeResult.Message.Value ?? string.Empty` to `HandleMessageAsync`. Behaviour must not change otherwise, and all existing tests must stay green.
+- [X] T007 In `src/Ecommerce.Payments.Consumer/Consumers/KafkaConsumerBase.cs`, change the consumer to `IConsumer<string?, string?>`, built with `ConsumerBuilder<string?, string?>`. Pass `consumeResult.Message.Value ?? string.Empty` to `HandleMessageAsync`. Behaviour must not change otherwise, and all existing tests must stay green.
 
 **Checkpoint**: the table and store exist and are proven by T004; the setting is validated; the
 consumer can read keys. The quality gate is green.

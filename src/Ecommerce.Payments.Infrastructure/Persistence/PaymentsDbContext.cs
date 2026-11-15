@@ -7,7 +7,8 @@ namespace Ecommerce.Payments.Infrastructure.Persistence;
 /// EF Core context for the payments schema — the <c>payments</c> table (with its idempotency
 /// unique index on <c>order_id</c>), the <c>payment_dead_letters</c> table (with its partial
 /// due-row index used by the dead-letter retry worker) and the <c>order_cancellation_markers</c>
-/// table (primary key <c>OrderId</c>: one marker per order).
+/// table (primary key <c>OrderId</c>: one marker per order), and the <c>consumed_dead_letters</c>
+/// table (inbound messages that could not be handled; unique per Kafka position).
 /// </summary>
 public sealed class PaymentsDbContext : DbContext
 {
@@ -25,6 +26,9 @@ public sealed class PaymentsDbContext : DbContext
 
     /// <summary>The <c>order_cancellation_markers</c> table: orders cancelled before their payment existed.</summary>
     public DbSet<CancellationMarkerEntity> CancellationMarkers => Set<CancellationMarkerEntity>();
+
+    /// <summary>The <c>consumed_dead_letters</c> table: inbound messages that could not be handled.</summary>
+    public DbSet<ConsumedDeadLetterEntity> ConsumedDeadLetters => Set<ConsumedDeadLetterEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -53,6 +57,18 @@ public sealed class PaymentsDbContext : DbContext
         {
             marker.ToTable("order_cancellation_markers");
             marker.HasKey(m => m.OrderId);
+        });
+
+        modelBuilder.Entity<ConsumedDeadLetterEntity>(deadLetter =>
+        {
+            deadLetter.ToTable(
+                "consumed_dead_letters",
+                table => table.HasCheckConstraint("CK_consumed_dead_letters_attempts", "\"Attempts\" >= 1"));
+            deadLetter.HasKey(d => d.Id);
+            // One row per Kafka position: storing the same message twice is a no-op.
+            deadLetter.HasIndex(d => new { d.Topic, d.Partition, d.Offset })
+                .IsUnique()
+                .HasDatabaseName("IX_consumed_dead_letters_position");
         });
     }
 }

@@ -9,7 +9,13 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services
     .AddOptions<KafkaOptions>()
-    .Bind(builder.Configuration.GetSection(KafkaOptions.SectionName));
+    .Bind(builder.Configuration.GetSection(KafkaOptions.SectionName))
+    .Validate(
+        options => options.ConsumerMaxAttempts > 0
+            && options.ConsumerRetryBaseDelayMs > 0
+            && options.ConsumerRetryMaxDelayMs >= options.ConsumerRetryBaseDelayMs,
+        "Kafka consumer retry settings must be positive and ConsumerRetryMaxDelayMs >= ConsumerRetryBaseDelayMs.")
+    .ValidateOnStart();
 
 builder.Services
     .AddOptions<PaymentPolicyOptions>()
@@ -38,6 +44,8 @@ builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IPaymentDeadLetterRepository, PaymentDeadLetterRepository>();
 // Per-order lock (ADR 0004) and cancellation markers (US-05).
 builder.Services.AddOrderPersistence();
+// Inbound messages that cannot be handled (US-06, ADR 0005).
+builder.Services.AddConsumedDeadLetterStore();
 // Singleton: the Kafka producer it wraps is designed to be long-lived and reused, not
 // recreated per message. One instance serves both the normal (dead-lettering) publish path and
 // the raw publish used by the dead-letter retry worker.

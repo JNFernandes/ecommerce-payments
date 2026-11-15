@@ -22,7 +22,7 @@ namespace Ecommerce.Payments.Consumer.Consumers;
 /// </summary>
 public abstract class KafkaConsumerBase : BackgroundService
 {
-    private readonly IConsumer<Ignore, string> _consumer;
+    private readonly IConsumer<string?, string?> _consumer;
 
     /// <summary>Builds the Kafka consumer (no broker connection is made here).</summary>
     protected KafkaConsumerBase(
@@ -41,7 +41,7 @@ public abstract class KafkaConsumerBase : BackgroundService
             EnableAutoCommit = false,
             AutoOffsetReset = AutoOffsetReset.Earliest
         };
-        _consumer = new ConsumerBuilder<Ignore, string>(consumerConfig).Build();
+        _consumer = new ConsumerBuilder<string?, string?>(consumerConfig).Build();
     }
 
     /// <summary>Bound <c>Kafka</c> configuration section.</summary>
@@ -76,7 +76,7 @@ public abstract class KafkaConsumerBase : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            ConsumeResult<Ignore, string> consumeResult;
+            ConsumeResult<string?, string?> consumeResult;
             try
             {
                 consumeResult = _consumer.Consume(stoppingToken);
@@ -94,7 +94,7 @@ public abstract class KafkaConsumerBase : BackgroundService
 
             try
             {
-                if (await HandleMessageAsync(consumeResult.Message.Value, stoppingToken))
+                if (await HandleMessageAsync(consumeResult.Message.Value ?? string.Empty, stoppingToken))
                 {
                     _consumer.Commit(consumeResult);
                 }
