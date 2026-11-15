@@ -218,7 +218,13 @@ processed exactly once.
   - the setting;
   - ADR 0005.
 - [X] T019 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all tasks `[X]`.
-- [ ] T020 Do the manual check from `specs/006-inbound-dead-letter/quickstart.md`, using isolated `us06-manual.*` topics and group as in US-05 T027, and clean up afterwards. Do it **only** if no other local Payments Consumer is running; otherwise skip it and record the reason here.
+- [X] T020 Do the manual check from `specs/006-inbound-dead-letter/quickstart.md`, using isolated `us06-manual.*` topics and group as in US-05 T027, and clean up afterwards. Do it **only** if no other local Payments Consumer is running; otherwise skip it and record the reason here.
+  - **Done 2026-11-15.** No other Payments Consumer was running.
+  - Migration `AddConsumedDeadLetters` was applied to the local `payments` database.
+  - The Consumer ran against the `us06-manual.*` topics, created by hand, with group `us06-manual-check`.
+  - Malformed message: `manual-key|not json` was stored once with `Attempts = 1`, its key, its payload and the `InvalidMessageException` error. The Warning was logged and the offset committed.
+  - Replay: a stored valid `OrderPlaced` row (`Attempts = 5`) was replayed with the exact commands in `docs/consumed-dead-letters.md`. It produced a `Processed` payment and one `PaymentProcessed` message.
+  - Cleanup: the Consumer was stopped, and the topics, the group, the test dead-letter rows and the test payment were deleted.
 
 ---
 
