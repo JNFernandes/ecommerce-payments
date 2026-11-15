@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Guidance for Claude Code in this repository. The source of truth for every rule here is
-`.specify/memory/constitution.md` (v1.2.0); if this file and the constitution disagree, the
+`.specify/memory/constitution.md` (v1.3.0); if this file and the constitution disagree, the
 constitution wins. Architectural decisions live in `docs/adr/`.
 
 ## Stack
@@ -61,6 +61,18 @@ Also: no `dynamic`/`object` for event data (enforced by `BannedSymbols.txt`), nu
 5. Commit the offset.
 
 Publishing before a confirmed save is a critical violation.
+
+> **Constitution v1.3.0 changes this flow** (transactional outbox, US-07, in progress in
+> `specs/007-transactional-outbox`). The target flow has three parts:
+> - The Service saves the state change **and** an outbox entry in one transaction, and never
+>   calls the Publisher.
+> - The Consumer commits the offset after that transaction.
+> - A background outbox relay publishes committed entries unchanged, in recorded order per
+>   payment, with backoff, `SKIP LOCKED` claiming and `Pending` / `Published` / `Exhausted`
+>   statuses.
+>
+> There is a single outbound store. Until US-07 is merged, the code on `main` follows the
+> steps above and the dead-letter retry below. New code must not add more direct-publish paths.
 
 **Dead-letter retry** (US-03): `DeadLetterRetryWorker` (`Ecommerce.Payments.Infrastructure/DeadLetters`,
 registered in the Consumer host) claims due `PendingRetry` rows one per transaction with

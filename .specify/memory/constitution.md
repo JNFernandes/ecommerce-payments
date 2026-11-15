@@ -1,36 +1,53 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.1.0 → 1.2.0 (MINOR — materially expanded guidance; one rule narrowed, no
-principle removed or redefined)
+Version change: 1.2.0 → 1.3.0. This is a MINOR bump, as requested. The invariant "never
+publish before a confirmed save" is kept and strengthened. *How* events reach Kafka changes:
+- the Service records them in a transactional outbox instead of calling the Publisher;
+- a background relay publishes them.
+
+A strict reading of the versioning policy could call the step-5 rewrite a redefinition (MAJOR).
+It was kept MINOR because no guarantee is weakened and no principle is removed.
 
 Modified principles:
-- II. Event-Driven Write Flow Integrity — added the cancellation-marker write (`OrderCancelled`
-  with no payment) and the "no payment for a marked order" rule to the idempotency guarantees.
-- VI. Kafka Consumption & Event Publishing — "Refund rules": an `OrderCancelled` whose payment
-  is not found no longer means "no state change"; it records a cancellation marker. `FAILED`
-  and `REFUNDED` handling unchanged.
+- I. Layering:
+  - **Service**: records outgoing events through the Repository in the same transaction as the
+    state change, and never calls the Kafka producer.
+  - **Repository**: the state change and its outbox entry are one atomic write.
+  - **Publisher**: invoked only by the outbox relay.
+  - **Consumer**: commits after the transaction that holds the state change and the outbox
+    entry.
+- II. Event-Driven Write Flow Integrity:
+  - steps 4 to 6 rewritten for the outbox;
+  - failure handling rewritten: a publish failure is now a relay retry, not a dead-letter
+    insert.
+- VI. Kafka Consumption & Event Publishing:
+  - publishing rules gain per-payment ordering and a healthy-path latency bound;
+  - "Failure handling" is reworded for the outbox;
+  - "Dead-letter retry" is renamed "Outbox relay", with statuses `Pending`, `Published` and
+    `Exhausted`.
 
-Added sections:
-- VI → "Cancellation markers" subsection (one marker per order enforced by a unique
-  constraint; marked orders are never charged and get no payment event; marker and payment
-  creation for the same order are mutually exclusive under concurrency; dedupe by `eventId`).
+Added sections: none (one renamed, see above).
 
 Removed sections: none.
 
 Templates / runtime docs:
-- ✅ .specify/templates/plan-template.md — Constitution Check derived at plan time; no change.
+- ✅ .specify/templates/plan-template.md — the Constitution Check is derived at plan time; no
+  change.
 - ✅ .specify/templates/spec-template.md — no change.
 - ✅ .specify/templates/tasks-template.md — no change.
-- ✅ .specify/templates/commands/*.md — directory not present in this repo.
-- ✅ CLAUDE.md — version reference and refund/marker rules updated to v1.2.0.
-- ⚠ README.md — "Known limitations" entry about a cancellation arriving before its payment
-  stays until US-05 is implemented (it still describes the code on `main`).
-- ⚠ specs/004-refund-on-order-cancelled — written against v1.1.0; intentionally not modified.
+- ✅ .specify/templates/commands/*.md — the directory is not present in this repo.
+- ✅ CLAUDE.md — version reference and write-flow summary updated to v1.3.0.
+- ⚠ README.md, docs/dead-letter-retry.md, docs/adr/0003 — these still describe the US-03
+  dead-letter mechanism that is on `main`. Update them, and supersede ADR 0003 if needed, in
+  US-07 (specs/007-transactional-outbox).
+- ⚠ specs/001–006 — written against earlier versions; intentionally not modified.
 
 Follow-up TODOs:
-- Code does not yet implement cancellation markers. Tracked by US-05
-  (specs/005-cancellation-marker).
+- The code does not implement the outbox yet. Tracked by US-07.
+- Open question US-07 Q1: should the outbox reuse `payment_dead_letters` (option A) or replace
+  it (option B)? This text requires a **single** outbound mechanism, which fits A or B but not
+  C.
 -->
 
 # ecommerce-payments Constitution
@@ -54,19 +71,22 @@ one class, or calling a layer out of order is a constitutional violation.
   - Validates the envelope shape only (e.g. required fields present, correct schema version).
   - Delegates immediately to the Service layer. MUST NOT contain business logic.
   - Owns offset commit strategy: commits **only after** the Service layer confirms the message
-    was fully processed (DB save + publish, or DB save + dead-letter on publish failure). Never
-    auto-commit before processing completes.
+    was fully processed. That means the transaction holding the state change and its outbox
+    entry has committed, or the decision to ignore has been made. It never waits for the Kafka
+    publish, which the outbox relay performs, and never auto-commits before processing
+    completes.
   - MUST catch all exceptions from the Service layer so a single bad message never crashes the
     host process; unhandled exceptions are logged and routed to retry/dead-letter, not thrown.
 
 - **Service** (`Application/` — Application/Handler layer)
-  - Orchestrates the end-to-end workflow for one consumed event: calls Domain, calls Repository,
-    calls Publisher, in that exact order (see Principle II).
+  - Orchestrates the end-to-end workflow for one consumed event: calls Domain, then calls the
+    Repository to save the state change **and** the resulting outbox entry in one transaction
+    (see Principle II).
   - Coordinates transactions/unit-of-work boundaries.
   - MUST NOT contain business rules — those belong exclusively to Domain. A Service method that
     branches on payment amounts, statuses, or business conditions is a violation.
-  - MUST NOT call the Kafka producer directly before the Repository has confirmed a successful
-    save.
+  - MUST NOT call the Kafka producer or the Publisher. Outgoing events are recorded in the
+    outbox and published by the outbox relay (Principle VI "Outbox relay").
 
 - **Domain** (`Domain/`)
   - Sole home of all business logic. `Payment` is the aggregate root.
@@ -88,15 +108,17 @@ one class, or calling a layer out of order is a constitutional violation.
   - Abstracts EF Core / PostgreSQL persistence behind an interface (e.g. `IPaymentRepository`)
     that the Service layer depends on.
   - MUST NOT leak EF Core entities/`DbContext` types into the Domain layer — map explicitly.
-  - Persists the `Payment` aggregate and MUST be the **first and only** durable write in the
-    flow before any Kafka publish is attempted (see Principle II).
+  - Persists the `Payment` aggregate together with the outbox entry for each domain event it
+    raised, in **one** atomic transaction. A state change MUST NOT be saved without its outbox
+    entry, and an outbox entry MUST NOT be saved without its state change (see Principle II).
 
 - **Publisher** (`Infrastructure/Messaging/`)
   - Wraps the Confluent.Kafka producer behind an interface (e.g. `IPaymentEventPublisher`).
-  - Serializes domain events into Kafka integration event payloads and publishes them.
-  - Is invoked by the Service layer **only after** the Repository call has returned success.
-  - MUST NOT be called from Domain or Repository layers directly — publishing is always
-    initiated by the Service layer, never as a side effect of persistence.
+  - Serializes domain events into Kafka integration event payloads. Serialization happens when
+    the outbox entry is written, so the stored payload is exactly what will be published.
+  - Publishes only stored outbox entries, and is invoked **only** by the outbox relay. The relay
+    reads entries that are already committed, so a publish can never precede its save.
+  - MUST NOT be called from Domain, Repository or Service code.
 
 ### II. Event-Driven Write Flow Integrity (NON-NEGOTIABLE)
 
@@ -108,29 +130,38 @@ The write flow MUST follow this exact sequence and MUST NOT deviate:
 3. **Service** invokes **Domain**: `Payment.Process()` (or the failure path, `Payment.Fail(reason)`)
    executes business logic and raises the corresponding domain event
    (`PaymentProcessed` / `PaymentFailed`).
-4. **Service** calls **Repository** to persist the `Payment` aggregate to **PostgreSQL first**.
-5. **Only after** a successful database save does **Service** call **Publisher** to publish the
-   corresponding event (`PaymentProcessed` → `payments.payment-processed`,
-   `PaymentFailed` → `payments.payment-failed`) to Kafka.
-6. **Consumer** commits the Kafka offset only after step 5 (or after step 4 + dead-letter
-   handling, see below) completes.
+4. **Service** calls **Repository** to persist, in **one PostgreSQL transaction**, the
+   `Payment` aggregate and an outbox entry for the domain event. The outbox entry holds the
+   serialized integration event, its topic (`PaymentProcessed` → `payments.payment-processed`,
+   `PaymentFailed` → `payments.payment-failed`) and its key (the payment id).
+5. **Consumer** commits the Kafka offset once that transaction has committed. It does not wait
+   for the event to be published.
+6. The **outbox relay**, a background service, publishes committed outbox entries to Kafka
+   through the **Publisher**, unchanged, and marks each one `Published`
+   (Principle VI "Outbox relay").
 
-The same sequence applies to `OrderCancelled` from `orders.order-cancelled`: Domain executes
-`Payment.Refund()` and raises `PaymentRefunded`, the Repository saves first, and only then is
-`PaymentRefunded` published to `payments.payment-refunded`. An `OrderCancelled` for an order
-with no payment instead records a cancellation marker (Principle VI "Cancellation markers");
-that write publishes nothing, and the offset is committed only after it is saved.
+The same sequence applies to `OrderCancelled` from `orders.order-cancelled`:
+- Domain executes `Payment.Refund()` and raises `PaymentRefunded`.
+- The refund and its outbox entry for `payments.payment-refunded` are saved in one
+  transaction.
+- The relay publishes the entry.
+
+An `OrderCancelled` for an order with no payment instead records a cancellation marker
+(Principle VI "Cancellation markers"). That write creates no outbox entry, and the offset is
+committed only after it is saved.
 
 **Failure handling:**
-- If the DB save (step 4) fails: **no Kafka publish MUST occur.** Log the error with full
-  context and retry the DB save (with backoff) before falling back to dead-letter. Do not
-  commit the consumer offset — the message MUST be reprocessed.
-- If the Kafka publish (step 5) fails **after** a successful DB save: log the error with full
-  context, store the pending event in a PostgreSQL dead-letter table for retry, and still
-  commit the consumer offset (the DB state is already correct and durable — do not reprocess
-  the whole `OrderPlaced` message just to re-attempt a publish).
+- If the transaction (step 4) fails, **nothing is saved and nothing is published**, because the
+  outbox entry is part of the failed transaction. Log the error with full context and retry with
+  backoff. Do not commit the consumer offset — the message MUST be reprocessed.
+- If publishing an outbox entry fails, the relay logs the error with full context and retries
+  later (Principle VI "Outbox relay"). The state change is already correct and durable, so the
+  inbound message is never reprocessed to re-attempt a publish.
+- A process crash at any point loses nothing. Either the transaction never committed and the
+  inbound message is redelivered, or the outbox entry exists and the relay publishes it after
+  restart.
 - Publishing to Kafka before a confirmed database save is a **critical violation** under any
-  circumstance.
+  circumstance. Publishing anything other than a committed outbox entry is a violation too.
 
 **Idempotency (NON-NEGOTIABLE):**
 - Kafka delivery is at-least-once. The Consumer → Service path MUST be idempotent: processing
@@ -211,7 +242,12 @@ This service is **both a consumer and a producer** of domain/integration events.
   order.
 - Each domain event maps to exactly one Kafka topic.
 - Topics follow the naming convention: `payments.<event-name>` in kebab-case.
-- Events MUST only be published after a confirmed PostgreSQL save (Principle II).
+- Events MUST only be published after a confirmed PostgreSQL save, and only from the outbox
+  (Principle II).
+- Events for the same payment MUST be published in the order their outbox entries were
+  recorded. A later event MUST NOT be published while an earlier one for the same payment is
+  unpublished. A failing event for one payment MUST NOT delay other payments' events.
+- In healthy conditions, an outbox entry MUST be published within 2 seconds of being committed.
 
 **Event payload rules:**
 - Every event MUST include: `eventId` (UUID), `occurredAt` (ISO timestamp), `aggregateId`
@@ -223,8 +259,10 @@ This service is **both a consumer and a producer** of domain/integration events.
 - Event classes MUST be documented with XML doc comments describing every field.
 
 **Failure handling:**
-- If Kafka publish fails after a successful DB save, the error MUST be logged with full context.
-- Failed events MUST be stored in a dead-letter table in PostgreSQL for retry.
+- If publishing an outbox entry fails, the error MUST be logged with full context, and the entry
+  stays in the outbox with its retry bookkeeping.
+- There MUST be a single outbound store, the outbox. No separate table or mechanism for failed
+  publishes is kept alongside it.
 - A Kafka publish failure MUST NOT cause the already-persisted `Payment` state to be rolled back
   — the DB save already succeeded and is the source of truth.
 
@@ -252,16 +290,24 @@ This service is **both a consumer and a producer** of domain/integration events.
 - Markers deduplicate redelivered cancellations by `eventId` (Principle II). Markers are not
   expired or removed.
 
-**Dead-letter retry:**
-- Dead-letter rows MUST carry: `status` (`PendingRetry`, `Resolved`, `Exhausted`), retry count,
-  next retry time, and last error, in addition to the event type and serialized payload.
-- A background worker MUST periodically retry due rows (`status = PendingRetry` and next retry
-  time ≤ now), using exponential backoff between attempts and a configured maximum retry count.
-  A successful publish marks the row `Resolved`; reaching the maximum marks it `Exhausted`.
-- Rows MUST be claimed so that several service instances never process the same row
-  (`SELECT … FOR UPDATE SKIP LOCKED` in PostgreSQL).
-- A retry MUST republish the original payload unchanged, keeping the original `eventId` so
-  downstream consumers can deduplicate.
+**Outbox relay:**
+- Outbox entries MUST carry the following, in addition to the event id, event type, topic, key
+  (payment id) and serialized payload:
+  - `status`: `Pending`, `Published` or `Exhausted`;
+  - retry count, next attempt time and last error;
+  - recorded time and published time.
+- A background relay MUST publish due entries (`status = Pending` and next attempt time ≤ now).
+  - It polls often enough to meet the healthy-path bound above.
+  - It uses exponential backoff between failed attempts, up to a configured maximum retry
+    count.
+  - A successful publish marks the entry `Published`; reaching the maximum marks it
+    `Exhausted` and logs an error.
+- Entries MUST be claimed so that several service instances never process the same entry
+  (`SELECT … FOR UPDATE SKIP LOCKED` in PostgreSQL), while preserving per-payment ordering.
+- The relay MUST publish the stored payload unchanged, with its stored key and its original
+  `eventId`. Delivery is at-least-once: a crash after publishing but before marking an entry
+  can publish it again, and downstream consumers deduplicate by `eventId`.
+- Published entries are kept for support. Cleaning them up is a separate concern.
 
 **Startup & broker availability:**
 - Application startup MUST NOT depend on Kafka being reachable. Kafka connectivity problems
@@ -358,7 +404,7 @@ doc comments, including field names, types, and semantics.
 Each project/module MUST include a `README.md` describing its responsibility, the topics it
 consumes/produces, and its position in the Consumer → Service → Domain → Repository → Publisher
 flow.
-Each new background service (hosted service / worker, e.g. a consumer or the dead-letter retry
+Each new background service (hosted service / worker, e.g. a consumer or the outbox relay
 worker) MUST be documented in the project root `README.md`.
 Architectural decisions MUST be recorded as ADRs in `docs/adr/` using the standard template
 (Context / Decision / Consequences).
@@ -381,4 +427,4 @@ note if existing code must change.
 Reviewers are empowered to block merges for violations without exception. New principles take
 effect immediately upon merge.
 
-**Version**: 1.2.0 | **Ratified**: 2026-07-08 | **Last Amended**: 2026-11-15
+**Version**: 1.3.0 | **Ratified**: 2026-07-08 | **Last Amended**: 2026-11-15
