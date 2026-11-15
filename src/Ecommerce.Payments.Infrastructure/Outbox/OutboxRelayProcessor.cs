@@ -7,14 +7,15 @@ using Microsoft.Extensions.Options;
 namespace Ecommerce.Payments.Infrastructure.Outbox;
 
 /// <summary>
-/// One retry cycle over <c>payment_dead_letters</c> (US-03, ADR 0003). For up to
-/// <see cref="OutboxRelayOptions.BatchSize"/> rows: open a transaction, claim one due row
-/// with <c>FOR UPDATE SKIP LOCKED</c>, republish its stored payload unchanged through
-/// <see cref="IRawEventPublisher"/> (which never writes a new dead letter), update the row's
-/// bookkeeping (<see cref="OutboxRetryPolicy"/>: Resolved, rescheduled with backoff, or
-/// Exhausted) and commit. One short transaction per row keeps locks bounded to a single publish
-/// and lets several instances work in parallel without ever processing the same row. If the
-/// cycle is cancelled mid-publish, the row's transaction rolls back and the row stays due.
+/// One outbox relay cycle over <c>payment_outbox</c> (US-07, ADR 0006; claim and backoff design
+/// from ADR 0003). For up to <see cref="OutboxRelayOptions.BatchSize"/> entries: open a
+/// transaction, claim the next due entry — recording order, never ahead of an unpublished earlier
+/// entry for the same payment, <c>FOR UPDATE SKIP LOCKED</c> — publish its stored payload
+/// unchanged through <see cref="IRawEventPublisher"/>, update its bookkeeping
+/// (<see cref="OutboxRetryPolicy"/>: Published, rescheduled with backoff, or Exhausted) and
+/// commit. One short transaction per entry keeps locks bounded to a single publish and lets
+/// several instances work in parallel without ever publishing the same entry concurrently. If
+/// the cycle is cancelled mid-publish, the entry's transaction rolls back and it stays due.
 /// </summary>
 public sealed class OutboxRelayProcessor : IOutboxRelayProcessor
 {
@@ -55,66 +56,82 @@ public sealed class OutboxRelayProcessor : IOutboxRelayProcessor
                 break;
             }
 
-            var row = claimed[0];
+            var entry = claimed[0];
             attempted++;
 
             try
             {
-                await _publisher.PublishRawAsync(row.Topic, row.MessageKey, row.Payload, cancellationToken);
+                await _publisher.PublishRawAsync(entry.Topic, entry.MessageKey, entry.Payload, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Update the existing row; the raw publisher never creates a new dead letter.
-                var exhausted = OutboxRetryPolicy.ApplyFailure(row, ex.Message, _timeProvider.GetUtcNow(), _options);
+                // The failure is recorded on the same entry; nothing new is written.
+                var exhausted = OutboxRetryPolicy.ApplyFailure(entry, ex.Message, _timeProvider.GetUtcNow(), _options);
                 await _repository.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
-                LogFailure(row, ex, exhausted);
+                await LogFailureAsync(entry, ex, exhausted, cancellationToken);
                 continue;
             }
 
-            OutboxRetryPolicy.ApplySuccess(row, _timeProvider.GetUtcNow());
+            OutboxRetryPolicy.ApplySuccess(entry, _timeProvider.GetUtcNow());
             await _repository.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            _logger.LogInformation(
-                "Republished dead letter {DeadLetterId} ({EventType} for payment {PaymentId}) to {Topic} on attempt {Attempt}; resolved.",
-                row.Id,
-                row.EventType,
-                row.PaymentId,
-                row.Topic,
-                row.RetryCount + 1);
+            if (entry.RetryCount > 0)
+            {
+                _logger.LogInformation(
+                    "Published outbox entry {EntryId} ({EventType} for payment {PaymentId}) to {Topic} after {RetryCount} failed attempt(s).",
+                    entry.Id,
+                    entry.EventType,
+                    entry.PaymentId,
+                    entry.Topic,
+                    entry.RetryCount);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Published outbox entry {EntryId} ({EventType} for payment {PaymentId}) to {Topic}.",
+                    entry.Id,
+                    entry.EventType,
+                    entry.PaymentId,
+                    entry.Topic);
+            }
         }
 
         return attempted;
     }
 
-    private void LogFailure(OutboxEntryEntity row, Exception error, bool exhausted)
+    private async Task LogFailureAsync(OutboxEntryEntity entry, Exception error, bool exhausted, CancellationToken cancellationToken)
     {
         if (exhausted)
         {
+            // Later events for this payment wait behind it (per-payment ordering) until re-queued.
+            var blocked = await _repository.CountBlockedAfterAsync(entry.PaymentId, entry.Sequence, cancellationToken);
             _logger.LogError(
                 error,
-                "Dead letter {DeadLetterId} ({EventType} for payment {PaymentId}) to {Topic} is Exhausted after " +
-                "{RetryCount} retries and will not be retried again. Last error: {LastError}",
-                row.Id,
-                row.EventType,
-                row.PaymentId,
-                row.Topic,
-                row.RetryCount,
-                row.LastError);
+                "Outbox entry {EntryId} ({EventType} for payment {PaymentId}) to {Topic} is Exhausted after " +
+                "{RetryCount} retries and will not be retried again; {Blocked} later event(s) for the same payment " +
+                "are waiting behind it. Last error: {LastError}",
+                entry.Id,
+                entry.EventType,
+                entry.PaymentId,
+                entry.Topic,
+                entry.RetryCount,
+                blocked,
+                entry.LastError);
             return;
         }
 
         _logger.LogWarning(
             error,
-            "Retry {RetryCount} of dead letter {DeadLetterId} ({EventType} for payment {PaymentId}) to {Topic} failed; " +
-            "next retry at {NextAttemptAt}. Error: {LastError}",
-            row.RetryCount,
-            row.Id,
-            row.EventType,
-            row.PaymentId,
-            row.Topic,
-            row.NextAttemptAt,
-            row.LastError);
+            "Publish attempt {RetryCount} of outbox entry {EntryId} ({EventType} for payment {PaymentId}) to {Topic} " +
+            "failed; next attempt at {NextAttemptAt}. Error: {LastError}",
+            entry.RetryCount,
+            entry.Id,
+            entry.EventType,
+            entry.PaymentId,
+            entry.Topic,
+            entry.NextAttemptAt,
+            entry.LastError);
     }
 }

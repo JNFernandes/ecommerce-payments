@@ -136,6 +136,23 @@ public class OutboxRelayProcessorTests
     }
 
     [Fact]
+    public async Task Should_Report_Blocked_Later_Events_When_Exhausted()
+    {
+        var row = OutboxRows.Pending(_clock.GetUtcNow(), retryCount: _options.MaxRetries - 1);
+        ClaimSequence(row);
+        PublishFails(new InvalidOperationException("broker down"));
+        _repository
+            .Setup(r => r.CountBlockedAfterAsync(row.PaymentId, row.Sequence, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(2);
+        var logger = new ListLogger<OutboxRelayProcessor>();
+
+        await CreateProcessor(logger).RunCycleAsync(CancellationToken.None);
+
+        var (_, message) = Assert.Single(logger.Entries, e => e.Level == LogLevel.Error);
+        Assert.Contains("2 later event(s)", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Should_Continue_With_Next_Row_After_A_Failed_Publish()
     {
         var now = _clock.GetUtcNow();

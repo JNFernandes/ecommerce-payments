@@ -19,7 +19,8 @@ public interface IPaymentOutboxRepository
 
     /// <summary>
     /// Claims up to <paramref name="limit"/> rows that are <see cref="OutboxStatus.Pending"/>
-    /// and due (<c>NextAttemptAt &lt;= now</c>), oldest due first, with
+    /// and due (<c>NextAttemptAt &lt;= now</c>), in recording order (<c>Sequence</c>), skipping any entry
+    /// that has an earlier unpublished entry for the same payment (per-payment ordering), with
     /// <c>SELECT ... FOR UPDATE SKIP LOCKED</c>: rows locked by another transaction (another
     /// worker or instance) are skipped without waiting, so no row is processed twice
     /// concurrently. MUST be called inside a transaction from <see cref="BeginTransactionAsync"/>.
@@ -33,6 +34,12 @@ public interface IPaymentOutboxRepository
         DateTimeOffset now,
         int limit,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Counts <see cref="OutboxStatus.Pending"/> entries for <paramref name="paymentId"/> recorded
+    /// after <paramref name="sequence"/> — the events waiting behind an exhausted entry.
+    /// </summary>
+    public Task<int> CountBlockedAfterAsync(Guid paymentId, long sequence, CancellationToken cancellationToken);
 
     /// <summary>Saves changes made to tracked (claimed) rows.</summary>
     /// <param name="cancellationToken">Cancellation token.</param>

@@ -63,16 +63,85 @@ public class OutboxClaimTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Should_Claim_Oldest_NextRetryAt_First_Up_To_Limit()
+    public async Task Should_Claim_In_Recording_Order_Up_To_Limit()
     {
-        var newest = await InsertAsync(Now.AddSeconds(-1));
-        var oldest = await InsertAsync(Now.AddSeconds(-30));
-        var middle = await InsertAsync(Now.AddSeconds(-10));
+        var first = await InsertAsync(Now.AddSeconds(-1));
+        var second = await InsertAsync(Now.AddSeconds(-30));
+        var third = await InsertAsync(Now.AddSeconds(-10));
 
         var claimed = await ClaimInNewTransactionAsync(limit: 2);
 
-        Assert.Equal([oldest.Id, middle.Id], claimed.Select(r => r.Id));
-        Assert.DoesNotContain(newest.Id, claimed.Select(r => r.Id));
+        Assert.Equal([first.Id, second.Id], claimed.Select(r => r.Id));
+        Assert.DoesNotContain(third.Id, claimed.Select(r => r.Id));
+    }
+
+    // ---- US-07 User Story 3: per-payment ordering ----
+
+    [Fact]
+    public async Task Later_Entry_Is_Not_Claimed_While_Earlier_Is_Pending()
+    {
+        var paymentId = Guid.NewGuid();
+        await InsertAsync(Now.AddMinutes(1), forPayment: paymentId);   // earlier, backing off
+        await InsertAsync(Now.AddSeconds(-1), forPayment: paymentId);  // later, due
+
+        Assert.Empty(await ClaimInNewTransactionAsync(limit: 10));
+    }
+
+    [Fact]
+    public async Task Later_Entry_Is_Claimed_After_Earlier_Is_Published()
+    {
+        var paymentId = Guid.NewGuid();
+        await InsertAsync(Now.AddSeconds(-5), OutboxStatus.Published, forPayment: paymentId);
+        var later = await InsertAsync(Now.AddSeconds(-1), forPayment: paymentId);
+
+        Assert.Equal([later.Id], (await ClaimInNewTransactionAsync(limit: 10)).Select(r => r.Id));
+    }
+
+    [Fact]
+    public async Task Exhausted_Earlier_Entry_Blocks_Later_One()
+    {
+        var paymentId = Guid.NewGuid();
+        var exhausted = await InsertAsync(Now.AddSeconds(-5), OutboxStatus.Exhausted, forPayment: paymentId);
+        await InsertAsync(Now.AddSeconds(-1), forPayment: paymentId);
+
+        Assert.Empty(await ClaimInNewTransactionAsync(limit: 10));
+
+        await using var dbContext = CreateDbContext();
+        Assert.Equal(1, await new PaymentOutboxRepository(dbContext)
+            .CountBlockedAfterAsync(paymentId, exhausted.Sequence, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Other_Payments_Are_Not_Blocked()
+    {
+        var blockedPayment = Guid.NewGuid();
+        await InsertAsync(Now.AddSeconds(-5), OutboxStatus.Exhausted, forPayment: blockedPayment);
+        await InsertAsync(Now.AddSeconds(-1), forPayment: blockedPayment);
+        var other = await InsertAsync(Now.AddSeconds(-1));
+
+        Assert.Equal([other.Id], (await ClaimInNewTransactionAsync(limit: 10)).Select(r => r.Id));
+    }
+
+    [Fact]
+    public async Task Concurrent_Claimers_Never_Take_Same_Entry_Or_Break_Order()
+    {
+        var p = Guid.NewGuid();
+        var p1 = await InsertAsync(Now.AddSeconds(-3), forPayment: p);
+        await InsertAsync(Now.AddSeconds(-2), forPayment: p);
+        var q1 = await InsertAsync(Now.AddSeconds(-1));
+
+        await using var contextA = CreateDbContext();
+        var repositoryA = new PaymentOutboxRepository(contextA);
+        await using var transactionA = await repositoryA.BeginTransactionAsync(CancellationToken.None);
+        Assert.Equal([p1.Id], (await repositoryA.ClaimDueAsync(Now, 1, CancellationToken.None)).Select(r => r.Id));
+
+        await using var contextB = CreateDbContext();
+        var repositoryB = new PaymentOutboxRepository(contextB);
+        await using var transactionB = await repositoryB.BeginTransactionAsync(CancellationToken.None);
+        var claimedB = await repositoryB.ClaimDueAsync(Now, 10, CancellationToken.None);
+
+        // P#1 is locked by A (skipped) and P#2 must wait for it: B only gets Q#1.
+        Assert.Equal([q1.Id], claimedB.Select(r => r.Id));
     }
 
     [Fact]
@@ -212,9 +281,10 @@ public class OutboxClaimTests : IAsyncLifetime
 
     internal async Task<OutboxEntryEntity> InsertAsync(
         DateTimeOffset nextRetryAt,
-        OutboxStatus status = OutboxStatus.Pending)
+        OutboxStatus status = OutboxStatus.Pending,
+        Guid? forPayment = null)
     {
-        var paymentId = Guid.NewGuid();
+        var paymentId = forPayment ?? Guid.NewGuid();
         var eventId = Guid.NewGuid();
         var row = new OutboxEntryEntity
         {

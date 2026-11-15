@@ -3,15 +3,15 @@ using Ecommerce.Payments.Infrastructure.Persistence.Entities;
 namespace Ecommerce.Payments.Infrastructure.Outbox;
 
 /// <summary>
-/// Pure retry decisions for <see cref="OutboxEntryEntity"/> rows (no I/O, no clock of its
+/// Pure delivery decisions for <see cref="OutboxEntryEntity"/> entries (no I/O, no clock of its
 /// own — the caller passes <c>now</c> from <see cref="TimeProvider"/>). Only bookkeeping fields
 /// are changed; the payload, topic, key and event type are never touched, so a republished
-/// event keeps its original <c>eventId</c> (ADR 0003).
+/// event keeps its original <c>eventId</c> (ADR 0003, ADR 0006).
 /// </summary>
 public static class OutboxRetryPolicy
 {
-    /// <summary>Marks a row as successfully republished.</summary>
-    /// <param name="row">The claimed dead-letter row.</param>
+    /// <summary>Marks an entry as published.</summary>
+    /// <param name="row">The claimed outbox entry.</param>
     /// <param name="now">Current time.</param>
     public static void ApplySuccess(OutboxEntryEntity row, DateTimeOffset now)
     {
@@ -38,12 +38,12 @@ public static class OutboxRetryPolicy
     }
 
     /// <summary>
-    /// Records a failed retry: increments <see cref="OutboxEntryEntity.RetryCount"/>, stores
-    /// the error and attempt time, and either schedules the next retry with
+    /// Records a failed publish attempt: increments <see cref="OutboxEntryEntity.RetryCount"/>, stores
+    /// the error and attempt time, and either schedules the next attempt with
     /// <see cref="ComputeDelay"/> or, once <see cref="OutboxRelayOptions.MaxRetries"/> is
-    /// reached, marks the row <see cref="OutboxStatus.Exhausted"/> so it is never retried again.
+    /// reached, marks the entry <see cref="OutboxStatus.Exhausted"/> so it is never retried again.
     /// </summary>
-    /// <param name="row">The claimed dead-letter row.</param>
+    /// <param name="row">The claimed outbox entry.</param>
     /// <param name="error">Error message of the failed publish.</param>
     /// <param name="now">Current time.</param>
     /// <param name="options">Retry settings.</param>

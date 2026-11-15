@@ -91,11 +91,11 @@ public class OutboxCrashRecoveryTests : IAsyncLifetime
         Assert.Equal(1, failed.RetryCount);
         Assert.False(string.IsNullOrWhiteSpace(failed.LastError));
 
-        // Broker back; make the entry due now instead of waiting out the backoff.
+        // Broker back; make the entry due now (host clock, as the relay uses) instead of waiting out the backoff.
         await using (var dbContext = CreateDbContext())
         {
             await dbContext.Database.ExecuteSqlAsync(
-                $"""UPDATE payment_outbox SET "NextAttemptAt" = now() WHERE "Id" = {failed.Id}""");
+                $"""UPDATE payment_outbox SET "NextAttemptAt" = {DateTimeOffset.UtcNow.AddSeconds(-1)} WHERE "Id" = {failed.Id}""");
         }
 
         await using (var brokerUp = BuildServiceProvider(_kafka.GetBootstrapAddress(), hostRelay: false))

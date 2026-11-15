@@ -235,13 +235,13 @@ delivery recovers, the processed message is consumed before the refunded one.
 
 ### Tests for User Story 3
 
-- [ ] T015 [P] [US3] Extend `tests/Ecommerce.Payments.Integration.Tests/OutboxClaimTests.cs`:
+- [X] T015 [P] [US3] Extend `tests/Ecommerce.Payments.Integration.Tests/OutboxClaimTests.cs`:
   - `Later_Entry_Is_Not_Claimed_While_Earlier_Is_Pending`. Entries 1 and 2 for P: entry 1 has a future `NextAttemptAt`, entry 2 is due, and nothing is claimed.
   - `Later_Entry_Is_Claimed_After_Earlier_Is_Published`.
   - `Exhausted_Earlier_Entry_Blocks_Later_One`.
   - `Other_Payments_Are_Not_Blocked`. P's entry 1 is `Exhausted`; Q's entry is claimed.
   - `Concurrent_Claimers_Never_Take_Same_Entry_Or_Break_Order`. Two connections in two transactions: A claims P#1 and holds it. B's claim returns Q#1, never P#1 and never P#2.
-- [ ] T016 [P] [US3] Component test **(new)** `tests/Ecommerce.Payments.Component.Tests/OutboxOrderingTests.cs`:
+- [X] T016 [P] [US3] Component test **(new)** `tests/Ecommerce.Payments.Component.Tests/OutboxOrderingTests.cs`:
   - `Processed_Is_Published_Before_Refunded_After_Outage`:
     1. With the relay pointed at `127.0.0.1:1`, process and refund one order directly through the consumers' `HandleMessageAsync`.
     2. Run one relay cycle. Both entries stay `Pending`, and the processed entry has `RetryCount = 1`.
@@ -252,7 +252,7 @@ delivery recovers, the processed message is consumed before the refunded one.
 
 ### Implementation for User Story 3
 
-- [ ] T017 [US3] Change the outbox repository and processor.
+- [X] T017 [US3] Change the outbox repository and processor.
   - In `src/Ecommerce.Payments.Infrastructure/Persistence/PaymentOutboxRepository.cs`, and its interface:
     - replace `ClaimDueAsync(now, limit)` with `Task<OutboxEntryEntity?> ClaimNextDueAsync(DateTimeOffset now, CancellationToken)`, using the research R4 query: `NOT EXISTS` on an earlier unpublished entry for the same `PaymentId`, `ORDER BY "Sequence"`, `LIMIT 1 FOR UPDATE SKIP LOCKED`. It still requires an open transaction;
     - add `Task<int> CountBlockedAfterAsync(Guid paymentId, long sequence, CancellationToken)`, counting `Pending` entries with a higher `Sequence`.
@@ -261,6 +261,7 @@ delivery recovers, the processed message is consumed before the refunded one.
     - when `ApplyFailure` exhausts an entry, add the blocked count to the Error log: "… is Exhausted after N retries; {Blocked} later event(s) for payment {PaymentId} are waiting behind it."
   - Update the fake repository in `tests/Ecommerce.Payments.Infrastructure.Tests/Outbox/` to match.
   - Makes T015 and T016 pass. Depends on T014 for the processor file.
+  - **As implemented:** the existing `ClaimDueAsync(now, limit)` signature was kept, with the R4 ordering query and `ORDER BY "Sequence"`, instead of adding a new `ClaimNextDueAsync`. The processor calls it with limit 1, and the claim tests keep their shape. Component tests set `NextAttemptAt` from the host clock rather than `now()`, because the container clock may differ from the clock the relay uses.
 
 **Checkpoint**: there are no more out-of-order "refunded before processed" events.
 
