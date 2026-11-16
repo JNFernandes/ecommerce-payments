@@ -35,22 +35,22 @@ There is no `contracts/` folder because nothing external changes.
 **Purpose**: the options, the result type, the purger skeleton, the indexes and the DI wiring.
 Nothing is purged yet.
 
-- [ ] T001 [P] Create `RetentionOptions` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/RetentionOptions.cs`.
+- [X] T001 [P] Create `RetentionOptions` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/RetentionOptions.cs`.
   - `SectionName = "Retention"`.
   - Properties with defaults: `IntervalMs` = 3_600_000, `BatchSize` = 1_000, `OutboxPublishedDays` = 30, `ConsumedDeadLettersDays` = 90, `CancellationMarkersDays` = 180.
   - XML docs on each property. They state that 0 means keep forever, and warn that marker retention must exceed the longest expected `OrderPlaced` delay.
   - `bool IsValid()`: `IntervalMs > 0 && BatchSize > 0` and all three day values `>= 0`.
 
   Also write `tests/Ecommerce.Payments.Infrastructure.Tests/Retention/RetentionOptionsTests.cs` **(new)**: the defaults are valid; zero days are valid; zero or negative interval or batch is invalid; negative days are invalid.
-- [ ] T002 [P] Create `PurgeResult` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/PurgeResult.cs`: `public sealed record PurgeResult(int OutboxEntries, int DeadLetters, int Markers)`, with a `Total` property. Create `IRetentionPurger` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/IRetentionPurger.cs`: `Task<PurgeResult> PurgeAsync(CancellationToken)`. Give both XML docs.
-- [ ] T003 Add the age indexes.
+- [X] T002 [P] Create `PurgeResult` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/PurgeResult.cs`: `public sealed record PurgeResult(int OutboxEntries, int DeadLetters, int Markers)`, with a `Total` property. Create `IRetentionPurger` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/IRetentionPurger.cs`: `Task<PurgeResult> PurgeAsync(CancellationToken)`. Give both XML docs.
+- [X] T003 Add the age indexes.
   - In `src/Ecommerce.Payments.Infrastructure/Persistence/PaymentsDbContext.cs`, add:
     - `IX_payment_outbox_published_at` on `PublishedAt`, filtered on `"Status" = 'Published'`;
     - `IX_consumed_dead_letters_failed_at` on `FailedAt`;
     - `IX_order_cancellation_markers_recorded_at` on `RecordedAt`.
   - Generate the migration with `dotnet ef migrations add AddRetentionIndexes --project src/Ecommerce.Payments.Infrastructure --startup-project src/Ecommerce.Payments.Infrastructure --output-dir Persistence/Migrations`, then run `dotnet format`.
   - Check that the migration only creates and drops those three indexes.
-- [ ] T004 Create `RetentionPurger` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/RetentionPurger.cs` as `public sealed class RetentionPurger : IRetentionPurger`. Its constructor takes `PaymentsDbContext`, `IOptions<RetentionOptions>` and `TimeProvider`.
+- [X] T004 Create `RetentionPurger` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/RetentionPurger.cs` as `public sealed class RetentionPurger : IRetentionPurger`. Its constructor takes `PaymentsDbContext`, `IOptions<RetentionOptions>` and `TimeProvider`.
   - `PurgeAsync`:
     1. Compute `now` once.
     2. For each store, if its days value is greater than 0, compute `cutoff = now.AddDays(-days)` and call a private `PurgeStoreAsync`.
@@ -80,7 +80,7 @@ Nothing is purged yet.
 **Independent Test**: on a real database, run `PurgeAsync` and check that only published entries
 past the cutoff are gone.
 
-- [ ] T005 [P] [US1] Write integration tests **(new)** in `tests/Ecommerce.Payments.Integration.Tests/RetentionPurgerTests.cs`. Use a PostgreSQL container with migrations applied, a `FakeTimeProvider` that starts on whole seconds, and helpers that insert rows directly with chosen timestamps.
+- [X] T005 [P] [US1] Write integration tests **(new)** in `tests/Ecommerce.Payments.Integration.Tests/RetentionPurgerTests.cs`. Use a PostgreSQL container with migrations applied, a `FakeTimeProvider` that starts on whole seconds, and helpers that insert rows directly with chosen timestamps.
   - `Purges_Only_Published_Outbox_Entries_Older_Than_Retention`: rows are published 31 days ago (deleted), published 29 days ago (kept), `Pending` 400 days old (kept), and `Exhausted` 400 days old (kept). The test asserts `PurgeResult.OutboxEntries == 1`.
   - `Outbox_Retention_Zero_Purges_Nothing`.
   - `Purging_Published_Earlier_Entry_Keeps_Later_Pending_Entry_Claimable`: payment P has #1 `Published` 31 days ago and #2 `Pending` and due. After the purge, `PaymentOutboxRepository.ClaimDueAsync` returns #2.
@@ -98,7 +98,7 @@ past the cutoff are gone.
 
 **Independent Test**: old rows are deleted and recent rows are kept; a store set to 0 is untouched.
 
-- [ ] T006 [US2] Extend `tests/Ecommerce.Payments.Integration.Tests/RetentionPurgerTests.cs` with:
+- [X] T006 [US2] Extend `tests/Ecommerce.Payments.Integration.Tests/RetentionPurgerTests.cs` with:
   - `Purges_Dead_Letters_Older_Than_Retention`: one stored 91 days ago is deleted, one stored 89 days ago is kept.
   - `Purges_Markers_Older_Than_Retention`: one recorded 181 days ago is deleted, one recorded 179 days ago is kept.
   - `Each_Store_Uses_Its_Own_Retention`: with outbox at 0, dead letters at 1 and markers at 0, only the old dead letter is deleted.
@@ -115,10 +115,10 @@ past the cutoff are gone.
 
 ### Tests for User Story 3
 
-- [ ] T007 [P] [US3] Extend `tests/Ecommerce.Payments.Integration.Tests/RetentionPurgerTests.cs` with:
+- [X] T007 [P] [US3] Extend `tests/Ecommerce.Payments.Integration.Tests/RetentionPurgerTests.cs` with:
   - `Purges_Backlog_Larger_Than_Ten_Batches_In_One_Call`: `BatchSize` = 10 and 105 expired dead letters, so one call returns 105 and leaves 0 rows.
   - `Concurrent_Purgers_Delete_Everything_Expired_Without_Errors`: two purgers, each with its own `DbContext`, run under `Task.WhenAll` against 500 expired markers and 50 recent ones, with `BatchSize` = 20. Their counts sum to 500, 50 rows remain, and neither throws.
-- [ ] T008 [P] [US3] Write unit tests **(new)** in `tests/Ecommerce.Payments.Infrastructure.Tests/Retention/RetentionWorkerTests.cs`. Use a `FakeTimeProvider`, a fake `IRetentionPurger` that records calls and can throw, a DI scope factory, and `ListLogger`, following the existing `OutboxRelayWorkerTests`.
+- [X] T008 [P] [US3] Write unit tests **(new)** in `tests/Ecommerce.Payments.Infrastructure.Tests/Retention/RetentionWorkerTests.cs`. Use a `FakeTimeProvider`, a fake `IRetentionPurger` that records calls and can throw, a DI scope factory, and `ListLogger`, following the existing `OutboxRelayWorkerTests`.
   - `Runs_Once_On_Start_Then_Every_Interval`.
   - `Logs_Error_And_Keeps_Running_When_A_Run_Fails`.
   - `Logs_Information_When_Something_Was_Deleted_And_Debug_Otherwise`.
@@ -126,7 +126,7 @@ past the cutoff are gone.
 
 ### Implementation for User Story 3
 
-- [ ] T009 [US3] Create `RetentionWorker` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/RetentionWorker.cs`, modelled on `OutboxRelayWorker`.
+- [X] T009 [US3] Create `RetentionWorker` **(new)** in `src/Ecommerce.Payments.Infrastructure/Retention/RetentionWorker.cs`, modelled on `OutboxRelayWorker`.
   - It is a `BackgroundService` whose constructor takes `IServiceScopeFactory`, `IOptions<RetentionOptions>`, `TimeProvider` and `ILogger<RetentionWorker>`.
   - `ExecuteAsync`:
     1. `await Task.Yield()`.
@@ -137,7 +137,7 @@ past the cutoff are gone.
   - Write an XML doc for the class.
 
   Makes T008 pass.
-- [ ] T010 [US3] Wire up the host.
+- [X] T010 [US3] Wire up the host.
   - In `src/Ecommerce.Payments.Consumer/Program.cs`, add `AddOptions<RetentionOptions>().Bind(section).Validate(o => o.IsValid(), "Retention settings: IntervalMs and BatchSize must be positive, retention days must be >= 0.").ValidateOnStart()`, then `AddRetention()` and `AddHostedService<RetentionWorker>()`.
   - Add the `Retention` section with its defaults to `src/Ecommerce.Payments.Consumer/appsettings.json`.
 

@@ -58,7 +58,7 @@ public sealed class OutboxRelayWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Dead-letter retry cycle failed; retrying on the next interval.");
+                _logger.LogError(ex, "Outbox relay cycle failed; retrying on the next interval.");
             }
         }
         while (await WaitForNextTickAsync(timer, stoppingToken));

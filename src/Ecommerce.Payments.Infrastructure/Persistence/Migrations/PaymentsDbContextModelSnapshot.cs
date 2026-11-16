@@ -42,6 +42,9 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
 
                     b.HasKey("OrderId");
 
+                    b.HasIndex("RecordedAt")
+                        .HasDatabaseName("IX_order_cancellation_markers_recorded_at");
+
                     b.ToTable("order_cancellation_markers", (string)null);
                 });
 
@@ -78,6 +81,9 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FailedAt")
+                        .HasDatabaseName("IX_consumed_dead_letters_failed_at");
 
                     b.HasIndex("Topic", "Partition", "Offset")
                         .IsUnique()
@@ -155,6 +161,10 @@ namespace Ecommerce.Payments.Infrastructure.Persistence.Migrations
                     b.HasIndex("NextAttemptAt")
                         .HasDatabaseName("IX_payment_outbox_due")
                         .HasFilter("\"Status\" = 'Pending'");
+
+                    b.HasIndex("PublishedAt")
+                        .HasDatabaseName("IX_payment_outbox_published_at")
+                        .HasFilter("\"Status\" = 'Published'");
 
                     b.HasIndex("Sequence")
                         .IsUnique()
