@@ -22,6 +22,69 @@ public class ProcessPaymentHandlerTests
         TotalAmount = 129.99m
     };
 
+    /// <summary>A stored Processed payment, as <see cref="IPaymentRepository.GetByOrderIdAsync"/> returns it.</summary>
+    private static Payment ExistingPayment(Guid? orderId = null, Guid? sourceEventId = null) =>
+        Payment.Rehydrate(
+            Guid.NewGuid(), orderId ?? Guid.NewGuid(), Guid.NewGuid(), 129.99m, "USD", PaymentStatus.Processed,
+            sourceEventId ?? Guid.NewGuid(), DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(-5),
+            null, null, null, null);
+
+    [Fact]
+    public async Task Should_Log_Duplicate_Delivery_When_Payment_Was_Created_By_Same_EventId()
+    {
+        var repository = new Mock<IPaymentRepository>();
+        var outbox = new Mock<IPaymentOutbox>();
+        var markers = new Mock<ICancellationMarkerRepository>();
+        var unitOfWork = new RecordingOrderUnitOfWork();
+        var logger = new ListLogger<ProcessPaymentHandler>();
+        var orderPlaced = ValidOrderPlaced();
+        var existing = ExistingPayment(orderPlaced.AggregateId, sourceEventId: orderPlaced.EventId);
+        repository
+            .Setup(r => r.GetByOrderIdAsync(orderPlaced.AggregateId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existing);
+
+        await CreateHandler(repository.Object, outbox.Object, markers: markers.Object, unitOfWork: unitOfWork, logger: logger)
+            .HandleAsync(orderPlaced, CancellationToken.None);
+
+        repository.Verify(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
+        outbox.VerifyNoOtherCalls();
+        markers.VerifyNoOtherCalls();
+        Assert.Equal(0, unitOfWork.Commits);
+        var (level, message) = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, level);
+        Assert.Contains("duplicate delivery", message, StringComparison.Ordinal);
+        Assert.Contains(orderPlaced.AggregateId.ToString(), message, StringComparison.Ordinal);
+        Assert.Contains(orderPlaced.EventId.ToString(), message, StringComparison.Ordinal);
+        Assert.Contains(existing.Id.ToString(), message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Should_Log_Already_Exists_When_Payment_Was_Created_By_Another_EventId()
+    {
+        var repository = new Mock<IPaymentRepository>();
+        var outbox = new Mock<IPaymentOutbox>();
+        var unitOfWork = new RecordingOrderUnitOfWork();
+        var logger = new ListLogger<ProcessPaymentHandler>();
+        var orderPlaced = ValidOrderPlaced();
+        var originalEventId = Guid.NewGuid();
+        var existing = ExistingPayment(orderPlaced.AggregateId, sourceEventId: originalEventId);
+        repository
+            .Setup(r => r.GetByOrderIdAsync(orderPlaced.AggregateId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existing);
+
+        await CreateHandler(repository.Object, outbox.Object, unitOfWork: unitOfWork, logger: logger)
+            .HandleAsync(orderPlaced, CancellationToken.None);
+
+        repository.Verify(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
+        outbox.VerifyNoOtherCalls();
+        Assert.Equal(0, unitOfWork.Commits);
+        var (level, message) = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, level);
+        Assert.Contains("already exists", message, StringComparison.Ordinal);
+        Assert.Contains(existing.Id.ToString(), message, StringComparison.Ordinal);
+        Assert.Contains(originalEventId.ToString(), message, StringComparison.Ordinal);
+    }
+
     private static ProcessPaymentHandler CreateHandler(
         IPaymentRepository repository,
         IPaymentOutbox publisher,
@@ -47,9 +110,6 @@ public class ProcessPaymentHandlerTests
         var orderPlaced = ValidOrderPlaced();
 
         repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
-        repository
             .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .Callback(() => calls.Add("Save"))
             .Returns(Task.CompletedTask);
@@ -71,9 +131,6 @@ public class ProcessPaymentHandlerTests
         var publisher = new Mock<IPaymentOutbox>();
         var callOrder = new List<string>();
 
-        repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
         repository
             .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("Repository"))
@@ -99,9 +156,6 @@ public class ProcessPaymentHandlerTests
         var publisher = new Mock<IPaymentOutbox>();
 
         repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
-        repository
             .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("transient DB failure"));
 
@@ -121,9 +175,6 @@ public class ProcessPaymentHandlerTests
         var publisher = new Mock<IPaymentOutbox>();
         var attempts = 0;
 
-        repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
         repository
             .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .Callback(() => attempts++)
@@ -145,8 +196,8 @@ public class ProcessPaymentHandlerTests
         var publisher = new Mock<IPaymentOutbox>();
 
         repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .Setup(r => r.GetByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ExistingPayment());
 
         var handler = CreateHandler(repository.Object, publisher.Object);
 
@@ -163,9 +214,6 @@ public class ProcessPaymentHandlerTests
         var publisher = new Mock<IPaymentOutbox>();
         var orderPlaced = ValidOrderPlaced();
 
-        repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
         repository
             .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -188,9 +236,6 @@ public class ProcessPaymentHandlerTests
         var publisher = new Mock<IPaymentOutbox>();
         var orderPlaced = ValidOrderPlaced();
 
-        repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
         repository
             .Setup(r => r.SaveAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -217,9 +262,6 @@ public class ProcessPaymentHandlerTests
         var orderPlaced = ValidOrderPlaced();
         var cancelEventId = Guid.NewGuid();
 
-        repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
         markers
             .Setup(m => m.GetByOrderIdAsync(orderPlaced.AggregateId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(CancellationMarker.Rehydrate(
@@ -248,8 +290,8 @@ public class ProcessPaymentHandlerTests
         var markers = new Mock<ICancellationMarkerRepository>();
 
         repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .Setup(r => r.GetByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ExistingPayment());
 
         await CreateHandler(repository.Object, publisher.Object, markers: markers.Object)
             .HandleAsync(ValidOrderPlaced(), CancellationToken.None);
@@ -266,9 +308,6 @@ public class ProcessPaymentHandlerTests
         var markers = new Mock<ICancellationMarkerRepository>();
         var orderPlaced = ValidOrderPlaced();
 
-        repository
-            .Setup(r => r.ExistsByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
         markers
             .Setup(m => m.GetByOrderIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((CancellationMarker?)null);

@@ -9,8 +9,9 @@ Orchestrates the end-to-end workflow for one consumed message, strictly in the o
 Domain → Repository (payment change **and** its outbox entry, one transaction), with a bounded retry (`PersistenceRetry`: 3 retries,
 exponential from 200 ms) around the database calls for transient failures:
 
-- **`ProcessPaymentHandler`** (`OrderPlaced`) — checks idempotency
-  (`IPaymentRepository.ExistsByOrderIdAsync`), invokes Domain (`Payment.CreatePending()` →
+- **`ProcessPaymentHandler`** (`OrderPlaced`) — loads the order's payment (`GetByOrderIdAsync`):
+  a redelivery whose `eventId` created it is logged as a duplicate delivery, any other
+  `OrderPlaced` for an order with a payment as "already exists" (US-08); otherwise invokes Domain (`Payment.CreatePending()` →
   `Payment.Evaluate()`), persists via `IPaymentRepository.SaveAsync` and records
   `PaymentProcessed` or `PaymentFailed` through `IPaymentOutbox`, in the same transaction.
 - **`RefundPaymentHandler`** (`OrderCancelled`, US-04) — loads the payment by order id

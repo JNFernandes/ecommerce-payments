@@ -12,15 +12,10 @@ public interface IPaymentRepository
     public Task SaveAsync(Payment payment, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Returns <see langword="true"/> if a <see cref="Payment"/> already exists for the given
-    /// <paramref name="orderId"/> — the idempotency check the Service layer runs before invoking
-    /// Domain (Constitution Principle II).
-    /// </summary>
-    public Task<bool> ExistsByOrderIdAsync(Guid orderId, CancellationToken cancellationToken);
-
-    /// <summary>
     /// Loads the <see cref="Payment"/> for <paramref name="orderId"/>, or returns
-    /// <see langword="null"/> when the order has no payment (a lookup result, not an error).
+    /// <see langword="null"/> when the order has no payment (a lookup result, not an error). The
+    /// idempotency lookup the Service runs before invoking Domain: a returned payment carries the
+    /// <c>eventId</c> that created it (<see cref="Payment.SourceEventId"/>; Constitution II).
     /// </summary>
     public Task<Payment?> GetByOrderIdAsync(Guid orderId, CancellationToken cancellationToken);
 

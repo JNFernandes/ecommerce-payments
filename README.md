@@ -42,9 +42,12 @@ order/payment saga by choreography — there is no central orchestrator
 
 See [docs/outbox.md](docs/outbox.md) and [ADR 0006](docs/adr/0006-transactional-outbox.md).
 
-Processing is idempotent: redelivering the same `OrderPlaced` message never creates a
-duplicate `Payment` or a duplicate published event (the order's `aggregateId` is the
-idempotency key).
+Processing is idempotent (US-08):
+- A redelivered `OrderPlaced` is recognised by its `eventId`, which is stored on the payment as
+  `SourceEventId` and checked before any business logic. It is logged as a duplicate delivery.
+- Any other `OrderPlaced` for an order that already has a payment is ignored too: the order's
+  `aggregateId` keeps it to one payment per order.
+- Neither case creates a payment or records an event.
 
 ## Event flow
 
@@ -125,8 +128,6 @@ How to list and replay stored messages:
   `payment_outbox`), then start it. The `DeadLetterRetry` settings section is now `OutboxRelay`.
 - Cancellation markers are never expired. Early cancellations that US-04 ignored before US-05
   shipped are not backfilled.
-- `OrderPlacedConsumer` deduplicates by order id rather than by `eventId` (predates
-  Constitution v1.1.0).
 
 ## Background services
 
