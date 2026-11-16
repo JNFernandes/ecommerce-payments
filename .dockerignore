@@ -1,6 +1,28 @@
+# Build output
 **/bin/
 **/obj/
-.git/
-.vs/
-specs/
+**/TestResults/
+**/*.user
+
+# Not needed to build the worker image
+tests/
 docs/
+specs/
+.specify/
+.claude/
+.config/
+*.md
+
+# Tooling / VCS / editors
+.git/
+.gitattributes
+.gitignore
+.vs/
+.vscode/
+.idea/
+Dockerfile*
+.dockerignore
+
+# Local secrets and logs
+.env*
+*.log
