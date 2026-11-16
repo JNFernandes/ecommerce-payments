@@ -136,6 +136,7 @@ How to list and replay stored messages:
 
 | Hosted service | Responsibility | Status |
 |---|---|---|
+| `DatabaseMigrator` | Starts first. It applies pending EF Core migrations before any consumer or worker runs. While PostgreSQL is unreachable it retries `DatabaseMigration:MaxAttempts` times (10, 3 s apart). If that fails, or a migration fails, it logs Critical and the process exits with code 1. Set `DatabaseMigration:Enabled=false` to apply migrations some other way. | Implemented |
 | `OrderPlacedConsumer` | Consumes `orders.order-placed` and runs the payment write flow. It skips orders that have a cancellation marker (US-05). Messages that are malformed or keep failing go to `consumed_dead_letters` (US-06). | Implemented |
 | `OutboxRelayWorker` | Every `OutboxRelay:PollIntervalMs` (250 ms) it publishes due `payment_outbox` entries unchanged (same topic, key and `eventId`), in recording order per payment. It retries failures with exponential backoff and marks an entry `Exhausted` after `MaxRetries`. Entries are claimed with `FOR UPDATE SKIP LOCKED`, so several instances are safe. See [docs/outbox.md](docs/outbox.md) and [ADR 0006](docs/adr/0006-transactional-outbox.md). | Implemented (US-03, US-07) |
 | `RetentionWorker` | Shortly after startup and then every `Retention:IntervalMs` (1 h), it purges `Published` outbox entries, inbound dead letters and cancellation markers older than their retention periods (30 / 90 / 180 days by default, `0` = keep forever). It deletes in batches with `FOR UPDATE SKIP LOCKED`, so several instances are safe, and logs the counts. `Pending` and `Exhausted` outbox entries and payments are never purged. See [docs/retention.md](docs/retention.md) and [ADR 0007](docs/adr/0007-data-retention.md). | Implemented (US-09) |
@@ -184,7 +185,9 @@ This exposes Kafka on `localhost:9092` and the payments PostgreSQL on `localhost
 (database `payments`, user `payments_user`, password `payments_pass`). The defaults in
 `src/Ecommerce.Payments.Consumer/appsettings.json` already point at these.
 
-Apply EF Core migrations (first run / after pulling new migrations):
+The worker applies pending EF Core migrations itself when it starts (`DatabaseMigrator`), so
+no manual step is needed. To apply them by hand instead (for example, with
+`DatabaseMigration:Enabled=false`):
 
 ```powershell
 dotnet tool restore
@@ -209,15 +212,69 @@ $env:Kafka__BootstrapServers = "localhost:9092"
 dotnet run --project src/Ecommerce.Payments.Consumer
 ```
 
-### Docker image
+## Docker
+
+### Build
 
 ```powershell
 docker build -t ecommerce-payments .
 ```
 
-Multi-stage build (.NET 10 SDK → .NET 10 runtime, non-root user). The service is not part of
-any compose file; when running the container, pass `ConnectionStrings__Payments` and
-`Kafka__BootstrapServers` pointing at addresses reachable from inside the container.
+The image is built in two stages:
+- **Build stage:** the .NET 10 SDK restores and publishes the worker for the target
+  architecture only (`amd64` or `arm64`, from Docker's `TARGETARCH`). The image therefore
+  carries a single librdkafka native library.
+- **Runtime stage:** `mcr.microsoft.com/dotnet/runtime:10.0-noble-chiseled`, the smallest
+  glibc-based .NET runtime, which librdkafka needs. It has no shell or package manager and runs
+  as the non-root `app` user (UID 1654).
+
+`.dockerignore` keeps tests, docs, specs and tooling out of the build context.
+
+### Run
+
+The container reads `appsettings.json` and then environment variables, which override it. Use
+`__` as the section separator, for example `Kafka__BootstrapServers` for
+`Kafka:BootstrapServers`. On startup it applies pending migrations before consuming anything.
+
+Against the shared `ecommerce-infra` stack, join its network and use the service names. Kafka's
+in-network listener is `kafka:29092`; `localhost:9092` only works from the host.
+
+```powershell
+docker run -d --name ecommerce-payments `
+  --network ecommerce_default `
+  --stop-timeout 30 `
+  -e ConnectionStrings__Payments="Host=postgres-payments;Port=5432;Database=payments;Username=payments_user;Password=payments_pass" `
+  -e Kafka__BootstrapServers=kafka:29092 `
+  -e Kafka__ConsumerGroupId=payments-service `
+  ecommerce-payments
+
+docker logs -f ecommerce-payments
+```
+
+- `--stop-timeout 30`: on `docker stop` the worker leaves its Kafka consumer group and finishes
+  the current message. This can take longer than Docker's default 10 s.
+- Exit code `1` means startup migration failed. The Critical log line explains why: the database
+  was unreachable after every attempt, or a migration failed.
+- A `Cannot load library libgssapi_krb5.so.2` line at startup is harmless. Npgsql probes for
+  Kerberos, which the chiseled image doesn't ship and this service doesn't use.
+
+### Environment variables
+
+| Variable | Default (`appsettings.json`) | Purpose |
+|---|---|---|
+| `ConnectionStrings__Payments` | `Host=localhost;Port=5434;…` | PostgreSQL connection string (**required** in a container) |
+| `Kafka__BootstrapServers` | `localhost:9092` | Kafka brokers (**required** in a container) |
+| `Kafka__ConsumerGroupId` | `payments-service` | Consumer group shared by all instances |
+| `Kafka__ConsumerMaxAttempts`, `Kafka__ConsumerRetryBaseDelayMs`, `Kafka__ConsumerRetryMaxDelayMs` | `5`, `1000`, `60000` | In-place consumer retries before an inbound message is dead-lettered |
+| `Kafka__*Topic` | see [Configuration reference](#configuration-reference) | Topic names |
+| `DatabaseMigration__Enabled` | `true` | Apply pending migrations at startup |
+| `DatabaseMigration__MaxAttempts`, `DatabaseMigration__RetryDelayMs` | `10`, `3000` | Wait for PostgreSQL to become reachable, then fail fast |
+| `OutboxRelay__PollIntervalMs`, `OutboxRelay__BatchSize`, `OutboxRelay__BaseDelayMs`, `OutboxRelay__MaxDelayMs`, `OutboxRelay__MaxRetries` | `250`, `100`, `5000`, `600000`, `8` | Outbox relay (replaces the old `DeadLetterRetry__*` settings since US-07) |
+| `Retention__IntervalMs`, `Retention__BatchSize`, `Retention__OutboxPublishedDays`, `Retention__ConsumedDeadLettersDays`, `Retention__CancellationMarkersDays` | `3600000`, `1000`, `30`, `90`, `180` | Data retention |
+| `Persistence__OrderLockTimeoutMs` | `5000` | Per-order lock wait |
+| `PaymentPolicy__MaxAmountThreshold` | `10000.00` | Amount above which a payment fails |
+| `Logging__LogLevel__Default` | `Information` | Log level, e.g. `Logging__LogLevel__Microsoft.EntityFrameworkCore=Warning` silences SQL logging |
+| `DOTNET_ENVIRONMENT` | `Production` | Host environment (loads `appsettings.{Environment}.json` if present) |
 
 ## Testing
 
@@ -245,6 +302,8 @@ dotnet test
 | `Kafka:ConsumerRetryBaseDelayMs` / `Kafka:ConsumerRetryMaxDelayMs` | Backoff before a consumer re-reads a message whose handling failed (defaults `1000` / `60000`) |
 | `Kafka:ConsumerMaxAttempts` | Failed attempts before an inbound message is stored in `consumed_dead_letters` and committed (default `5`, [ADR 0005](docs/adr/0005-inbound-dead-letter.md)) |
 | `PaymentPolicy:MaxAmountThreshold` | Amount above which a payment fails instead of processing |
+| `DatabaseMigration:Enabled` | Apply pending EF Core migrations at startup, before anything consumes (default `true`) |
+| `DatabaseMigration:MaxAttempts` / `DatabaseMigration:RetryDelayMs` | Attempts while PostgreSQL is unreachable, and the wait between them, before startup fails with exit code 1 (defaults `10` / `3000`) |
 | `Persistence:OrderLockTimeoutMs` | Maximum wait for the per-order lock before the attempt fails and is retried (default `5000`, [ADR 0004](docs/adr/0004-per-order-serialisation.md)) |
 | `OutboxRelay:PollIntervalMs` | Time between outbox relay cycles (default `250`) |
 | `OutboxRelay:BatchSize` | Maximum entries published per cycle (default `100`) |

@@ -46,8 +46,18 @@ builder.Services
 
 builder.Services.AddSingleton(TimeProvider.System);
 
+builder.Services
+    .AddOptions<DatabaseMigrationOptions>()
+    .Bind(builder.Configuration.GetSection(DatabaseMigrationOptions.SectionName))
+    .Validate(options => options.IsValid(), "DatabaseMigration:MaxAttempts and RetryDelayMs must be positive.")
+    .ValidateOnStart();
+
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Payments")));
+
+// Apply pending migrations before anything consumes or publishes. MUST stay the first hosted
+// service: the host starts them in registration order and stops at the first failure.
+builder.Services.AddDatabaseMigration();
 
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IPaymentOutboxRepository, PaymentOutboxRepository>();
@@ -74,4 +84,14 @@ builder.Services.AddRetention();
 builder.Services.AddHostedService<RetentionWorker>();
 
 var host = builder.Build();
-host.Run();
+
+try
+{
+    await host.RunAsync();
+    return 0;
+}
+catch (DatabaseMigrationException)
+{
+    // Already logged as Critical by DatabaseMigrator; exit non-zero so the orchestrator sees it.
+    return 1;
+}

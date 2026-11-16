@@ -35,6 +35,16 @@ docker build -t ecommerce-payments .
 The design-time `PaymentsDbContextFactory` uses `PAYMENTS_CONNECTION_STRING` if set, otherwise
 the `ecommerce-infra` defaults above.
 
+At runtime the worker applies pending migrations itself: `DatabaseMigrator`
+(`Infrastructure/Persistence`, registered with `AddDatabaseMigration()`).
+- It MUST stay the first hosted service registered in `Program.cs`. The host starts hosted
+  services in order and stops at the first failure.
+- While PostgreSQL is unreachable it retries `DatabaseMigration:MaxAttempts` times.
+- If it still fails, it logs Critical and the process exits with code 1.
+
+Container settings are environment variables such as `ConnectionStrings__Payments` and
+`Kafka__BootstrapServers`. See the README's Docker section.
+
 ## Layering (non-negotiable)
 
 **Consumer → Service → Domain → Repository → Publisher** — one way, no skipping, no merging.
