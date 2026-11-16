@@ -1,33 +1,26 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.2.0 → 1.3.0. This is a MINOR bump, as requested. The invariant "never
-publish before a confirmed save" is kept and strengthened. *How* events reach Kafka changes:
-- the Service records them in a transactional outbox instead of calling the Publisher;
-- a background relay publishes them.
-
-A strict reading of the versioning policy could call the step-5 rewrite a redefinition (MAJOR).
-It was kept MINOR because no guarantee is weakened and no principle is removed.
+Version change: 1.3.0 → 1.4.0 (MINOR — new subsection and materially expanded guidance; no
+principle removed or redefined). Two "keep forever" statements are narrowed to "keep for at least
+the configured retention period".
 
 Modified principles:
-- I. Layering:
-  - **Service**: records outgoing events through the Repository in the same transaction as the
-    state change, and never calls the Kafka producer.
-  - **Repository**: the state change and its outbox entry are one atomic write.
-  - **Publisher**: invoked only by the outbox relay.
-  - **Consumer**: commits after the transaction that holds the state change and the outbox
-    entry.
-- II. Event-Driven Write Flow Integrity:
-  - steps 4 to 6 rewritten for the outbox;
-  - failure handling rewritten: a publish failure is now a relay retry, not a dead-letter
-    insert.
 - VI. Kafka Consumption & Event Publishing:
-  - publishing rules gain per-payment ordering and a healthy-path latency bound;
-  - "Failure handling" is reworded for the outbox;
-  - "Dead-letter retry" is renamed "Outbox relay", with statuses `Pending`, `Published` and
-    `Exhausted`.
+  - "Cancellation markers": markers are no longer "never expired or removed". They are kept for
+    at least the marker retention period, then may be purged.
+  - "Outbox relay": published entries are kept for support until purged under "Data
+    retention"; the separate-concern note is removed.
 
-Added sections: none (one renamed, see above).
+Added sections:
+- VI → "Data retention" subsection. It covers:
+  - a configurable retention period for each of published outbox entries, inbound dead
+    letters and cancellation markers, where 0 keeps the data forever;
+  - `Pending` and `Exhausted` outbox entries are never purged;
+  - purging is done by age, in bounded batches, safe across instances, and never blocks
+    startup or payment processing;
+  - each run logs the counts it deleted;
+  - the marker retention must exceed the longest expected `OrderPlaced` delay.
 
 Removed sections: none.
 
@@ -37,14 +30,14 @@ Templates / runtime docs:
 - ✅ .specify/templates/spec-template.md — no change.
 - ✅ .specify/templates/tasks-template.md — no change.
 - ✅ .specify/templates/commands/*.md — the directory is not present in this repo.
-- ✅ CLAUDE.md — version reference and write-flow summary updated to v1.3.0.
-- ✅ README.md, docs/outbox.md (replaces docs/dead-letter-retry.md), ADR 0006 (supersedes ADR 0003) —
-  updated by US-07 (specs/007-transactional-outbox).
-- ⚠ specs/001–006 — written against earlier versions; intentionally not modified.
+- ✅ CLAUDE.md — version reference updated to v1.4.0, with a retention note.
+- ⚠ README.md, docs/outbox.md, docs/consumed-dead-letters.md — they still say entries, dead
+  letters and markers are never removed (true on `main` until US-09 ships). Update them in
+  US-09 (specs/009-data-retention).
+- ⚠ specs/001–008 — written against earlier versions; intentionally not modified.
 
 Follow-up TODOs:
-- None. US-07 implements the outbox (Q1 resolved: option A, `payment_dead_letters` became
-  `payment_outbox` in place).
+- The code does not purge anything yet. Tracked by US-09.
 -->
 
 # ecommerce-payments Constitution
@@ -284,8 +277,8 @@ This service is **both a consumer and a producer** of domain/integration events.
   concurrency: whichever is committed first wins and the other then observes it. The service
   MUST never end with a `PROCESSED`, unrefunded payment for a marked order, nor create a payment
   after the order's marker exists. Losing this race is a normal outcome, not an error.
-- Markers deduplicate redelivered cancellations by `eventId` (Principle II). Markers are not
-  expired or removed.
+- Markers deduplicate redelivered cancellations by `eventId` (Principle II). A marker MUST be
+  kept for at least the marker retention period, then MAY be purged ("Data retention" below).
 
 **Outbox relay:**
 - Outbox entries MUST carry the following, in addition to the event id, event type, topic, key
@@ -304,7 +297,27 @@ This service is **both a consumer and a producer** of domain/integration events.
 - The relay MUST publish the stored payload unchanged, with its stored key and its original
   `eventId`. Delivery is at-least-once: a crash after publishing but before marking an entry
   can publish it again, and downstream consumers deduplicate by `eventId`.
-- Published entries are kept for support. Cleaning them up is a separate concern.
+- Published entries are kept for support until purged under "Data retention" below.
+
+**Data retention:**
+- Three stores MAY be purged by age. Each has its own configurable retention period, and a
+  period of 0 keeps that store forever:
+  - `Published` outbox entries, measured from their publish time;
+  - inbound dead letters, measured from when they were stored;
+  - cancellation markers, measured from when they were recorded.
+- `Pending` and `Exhausted` outbox entries MUST NEVER be purged, whatever their age. Purging
+  `Published` entries MUST NOT change the per-payment publishing order of the remaining ones.
+- Purging MUST:
+  - run in the background;
+  - delete in bounded batches;
+  - be safe to run on several instances at once;
+  - never delay startup or payment processing;
+  - log how many records it deleted from each store on each run;
+  - when it fails, log the error and retry on the next run.
+- The marker retention period MUST be longer than the longest expected delay of an
+  `OrderPlaced` behind its `OrderCancelled`. A marker purged too early would let a very late
+  `OrderPlaced` charge a cancelled order.
+- Payments and other business data are never purged.
 
 **Startup & broker availability:**
 - Application startup MUST NOT depend on Kafka being reachable. Kafka connectivity problems
@@ -424,4 +437,4 @@ note if existing code must change.
 Reviewers are empowered to block merges for violations without exception. New principles take
 effect immediately upon merge.
 
-**Version**: 1.3.0 | **Ratified**: 2026-07-08 | **Last Amended**: 2026-11-15
+**Version**: 1.4.0 | **Ratified**: 2026-07-08 | **Last Amended**: 2026-11-16

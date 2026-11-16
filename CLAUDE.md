@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Guidance for Claude Code in this repository. The source of truth for every rule here is
-`.specify/memory/constitution.md` (v1.3.0); if this file and the constitution disagree, the
+`.specify/memory/constitution.md` (v1.4.0); if this file and the constitution disagree, the
 constitution wins. Architectural decisions live in `docs/adr/`.
 
 ## Stack
@@ -105,6 +105,17 @@ in the background.
   `PersistenceRetry.Pipeline`, not single statements.
 - Record events in the outbox inside the transaction; never publish from a handler (the relay does).
 - Register with `services.AddOrderPersistence()`. Tests that build handlers need it too.
+
+**Data retention** (constitution v1.4.0, Principle VI "Data retention"; US-09, in progress in
+`specs/009-data-retention`):
+- `Published` outbox entries, inbound dead letters and cancellation markers may be purged by age.
+  Each store has its own setting, and `0` keeps it forever.
+- `Pending` and `Exhausted` outbox entries are never purged. Payments and other business data are
+  never purged.
+- Deletes run in batches in the background, are safe across instances, and log their counts.
+- Keep the marker retention long: purging a marker too early lets a very late `OrderPlaced`
+  charge a cancelled order.
+- Until US-09 is merged, nothing is purged on `main`.
 
 ## Idempotency
 
