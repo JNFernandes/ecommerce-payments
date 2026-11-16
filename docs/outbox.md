@@ -87,6 +87,12 @@ the defaults that is 5 s, 10 s, 20 s, 40 s, 80 s, 160 s, 320 s; the 8th failure 
   The relay never publishes a later entry before an earlier one. Different payments are
   independent.
 
+## Retention
+
+`Published` entries are purged after `Retention:OutboxPublishedDays` (default 30 days; `0`
+keeps them forever). `Pending` and `Exhausted` entries are never purged. Purging cannot block
+or reorder later events. See [retention.md](retention.md) (US-09).
+
 ## Useful queries
 
 ```sql

@@ -118,16 +118,19 @@ How to list and replay stored messages:
 
 ### Known limitations
 
-- Messages in `consumed_dead_letters` are not replayed automatically, and the service never
-  removes them. A parked `OrderCancelled` leaves its payment `Processed` until it is replayed.
+- Messages in `consumed_dead_letters` are not replayed automatically. A parked `OrderCancelled`
+  leaves its payment `Processed` until it is replayed. Rows are purged after 90 days
+  ([docs/retention.md](docs/retention.md)).
 - The consumer keeps its attempt count in memory, so after a restart the count for a failing
   message starts again.
-- An `Exhausted` outbox entry holds back later events for the same payment until it is re-queued
-  ([docs/outbox.md](docs/outbox.md)). Published outbox entries are kept and never cleaned up.
+- An `Exhausted` outbox entry holds back later events for the same payment until it is
+  re-queued ([docs/outbox.md](docs/outbox.md)).
 - Upgrading to US-07: stop the service, run the migration (`payment_dead_letters` becomes
   `payment_outbox`), then start it. The `DeadLetterRetry` settings section is now `OutboxRelay`.
-- Cancellation markers are never expired. Early cancellations that US-04 ignored before US-05
-  shipped are not backfilled.
+- Cancellation markers are purged after `Retention:CancellationMarkersDays` (180 days). If an
+  `OrderPlaced` arrives later than that behind its `OrderCancelled`, the cancelled order is
+  charged ([docs/retention.md](docs/retention.md)). Early cancellations that US-04 ignored
+  before US-05 shipped are not backfilled.
 
 ## Background services
 
@@ -135,6 +138,7 @@ How to list and replay stored messages:
 |---|---|---|
 | `OrderPlacedConsumer` | Consumes `orders.order-placed` and runs the payment write flow. It skips orders that have a cancellation marker (US-05). Messages that are malformed or keep failing go to `consumed_dead_letters` (US-06). | Implemented |
 | `OutboxRelayWorker` | Every `OutboxRelay:PollIntervalMs` (250 ms) it publishes due `payment_outbox` entries unchanged (same topic, key and `eventId`), in recording order per payment. It retries failures with exponential backoff and marks an entry `Exhausted` after `MaxRetries`. Entries are claimed with `FOR UPDATE SKIP LOCKED`, so several instances are safe. See [docs/outbox.md](docs/outbox.md) and [ADR 0006](docs/adr/0006-transactional-outbox.md). | Implemented (US-03, US-07) |
+| `RetentionWorker` | Shortly after startup and then every `Retention:IntervalMs` (1 h), it purges `Published` outbox entries, inbound dead letters and cancellation markers older than their retention periods (30 / 90 / 180 days by default, `0` = keep forever). It deletes in batches with `FOR UPDATE SKIP LOCKED`, so several instances are safe, and logs the counts. `Pending` and `Exhausted` outbox entries and payments are never purged. See [docs/retention.md](docs/retention.md) and [ADR 0007](docs/adr/0007-data-retention.md). | Implemented (US-09) |
 | `OrderCancelledConsumer` | Consumes `orders.order-cancelled`. Refunds the order's `Processed` payment and records `PaymentRefunded` in the outbox with the refund (US-07). Failed, Pending or already Refunded payments are ignored with an Information log. With no payment, it records a cancellation marker (US-05). Messages that are malformed or keep failing go to `consumed_dead_letters` (US-06). | Implemented (US-04, US-05, US-06) |
 
 ## Project layout
@@ -144,7 +148,7 @@ src/
   Ecommerce.Payments.Consumer/        Worker Service host, Kafka consumers
   Ecommerce.Payments.Service/         Application/handler layer
   Ecommerce.Payments.Domain/          Payment aggregate, domain events, business rules
-  Ecommerce.Payments.Infrastructure/  EF Core repositories, outbox and its relay, Kafka publisher, migrations
+  Ecommerce.Payments.Infrastructure/  EF Core repositories, outbox and its relay, retention purge, Kafka publisher, migrations
 tests/
   Ecommerce.Payments.Domain.Tests/          Unit tests, no infrastructure
   Ecommerce.Payments.Service.Tests/         Unit tests with mocked Repository/Publisher
@@ -154,6 +158,7 @@ tests/
 docs/
   adr/                                Architecture Decision Records
   outbox.md                           Outbox: states, settings, ordering, re-queue, upgrade
+  retention.md                        Data retention: what is purged and when, settings, marker trade-off
   consumed-dead-letters.md            Inbound dead letters: what lands there, listing, replay
 specs/
   NNN-feature-name/                   Spec-Kit artifacts (spec, plan, tasks) per user story
@@ -245,6 +250,8 @@ dotnet test
 | `OutboxRelay:BatchSize` | Maximum entries published per cycle (default `100`) |
 | `OutboxRelay:BaseDelayMs` / `OutboxRelay:MaxDelayMs` | Exponential backoff base and cap after a failed publish (defaults `5000` / `600000`) |
 | `OutboxRelay:MaxRetries` | Failed attempts before an entry is `Exhausted` (default `8`) |
+| `Retention:IntervalMs` / `Retention:BatchSize` | Time between retention purges and rows per delete statement (defaults `3600000` / `1000`) |
+| `Retention:OutboxPublishedDays` / `Retention:ConsumedDeadLettersDays` / `Retention:CancellationMarkersDays` | Days published outbox entries / inbound dead letters / cancellation markers are kept before purging; `0` keeps forever (defaults `30` / `90` / `180`, [docs/retention.md](docs/retention.md)) |
 
 Details: [docs/outbox.md](docs/outbox.md).
 

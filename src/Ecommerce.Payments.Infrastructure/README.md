@@ -49,6 +49,18 @@ Outward-facing adapters, kept in separate folders/namespaces and never reference
   - `OutboxRetryPolicy` holds the pure backoff and exhaustion rules.
   - `OutboxRelayOptions` maps the `OutboxRelay` config section.
 
+- **`Retention/`**: data retention (US-09, [ADR 0007](../../docs/adr/0007-data-retention.md),
+  [docs/retention.md](../../docs/retention.md)).
+  - `RetentionPurger` implements `IRetentionPurger`. It deletes `Published` outbox entries,
+    inbound dead letters and cancellation markers older than their retention periods. Each batch
+    is one statement, `DELETE … IN (SELECT … LIMIT n FOR UPDATE SKIP LOCKED)`.
+  - `RetentionWorker` is the hosted service; the Consumer host runs it every hour.
+  - `RetentionOptions` binds the `Retention` config section.
+  - `PurgeResult` holds the counts deleted per table.
+  - `AddRetention()` registers the purger.
+
+  Migration `AddRetentionIndexes` adds the three age indexes the purge uses.
+
 ## Topics
 
 | Direction | Topic | Event |

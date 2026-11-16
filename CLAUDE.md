@@ -106,16 +106,21 @@ in the background.
 - Record events in the outbox inside the transaction; never publish from a handler (the relay does).
 - Register with `services.AddOrderPersistence()`. Tests that build handlers need it too.
 
-**Data retention** (constitution v1.4.0, Principle VI "Data retention"; US-09, in progress in
-`specs/009-data-retention`):
-- `Published` outbox entries, inbound dead letters and cancellation markers may be purged by age.
-  Each store has its own setting, and `0` keeps it forever.
-- `Pending` and `Exhausted` outbox entries are never purged. Payments and other business data are
-  never purged.
-- Deletes run in batches in the background, are safe across instances, and log their counts.
-- Keep the marker retention long: purging a marker too early lets a very late `OrderPlaced`
+**Data retention** (US-09, constitution v1.4.0 Principle VI "Data retention",
+[ADR 0007](docs/adr/0007-data-retention.md), `docs/retention.md`):
+- `RetentionWorker` (`Ecommerce.Payments.Infrastructure/Retention`) runs `RetentionPurger`
+  shortly after startup and then every `Retention:IntervalMs` (1 h).
+- It purges by age:
+  - `Published` outbox entries after `OutboxPublishedDays` (30);
+  - inbound dead letters after `ConsumedDeadLettersDays` (90);
+  - cancellation markers after `CancellationMarkersDays` (180).
+
+  `0` keeps a table forever.
+- `Pending` and `Exhausted` outbox entries and payments are never purged.
+- Deletes are batched (`BatchSize`, 1 000) using
+  `DELETE … IN (SELECT … LIMIT n FOR UPDATE SKIP LOCKED)`, which is safe across instances.
+- Keep the marker retention long: a marker purged too early lets a very late `OrderPlaced`
   charge a cancelled order.
-- Until US-09 is merged, nothing is purged on `main`.
 
 ## Idempotency
 

@@ -21,6 +21,7 @@ Contains no business logic — see `Ecommerce.Payments.Service` for orchestratio
 | `OrderPlacedConsumer` | this project | Consumes `orders.order-placed` and runs the payment write flow. |
 | `OrderCancelledConsumer` | this project | Consumes `orders.order-cancelled` and hands each cancellation to `RefundPaymentHandler` (US-04). |
 | `OutboxRelayWorker` | `Ecommerce.Payments.Infrastructure/Outbox` | Publishes `payment_outbox` entries in order per payment, with backoff ([docs/outbox.md](../../docs/outbox.md), US-07). |
+| `RetentionWorker` | `Ecommerce.Payments.Infrastructure/Retention` | Hourly purge of old published outbox entries, dead letters and cancellation markers ([docs/retention.md](../../docs/retention.md), US-09). |
 
 ## Topics
 
@@ -52,7 +53,9 @@ See `appsettings.json` — `ConnectionStrings:Payments`, `Kafka:BootstrapServers
 `Kafka:ConsumerRetryBaseDelayMs`, `Kafka:ConsumerRetryMaxDelayMs`, `Kafka:ConsumerMaxAttempts`
 (the `Kafka` retry settings are validated at startup), `PaymentPolicy:MaxAmountThreshold`,
 `Persistence:OrderLockTimeoutMs` (per-order lock wait, validated at startup; US-05), and the `OutboxRelay`
-section (`PollIntervalMs`, `BatchSize`, `BaseDelayMs`, `MaxDelayMs`, `MaxRetries`).
+section (`PollIntervalMs`, `BatchSize`, `BaseDelayMs`, `MaxDelayMs`, `MaxRetries`), and the `Retention`
+section (`IntervalMs`, `BatchSize`, `OutboxPublishedDays`, `ConsumedDeadLettersDays`,
+`CancellationMarkersDays`; validated at startup, `0` days = keep forever; US-09).
 
 ## Running locally
 

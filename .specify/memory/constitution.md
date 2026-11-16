@@ -31,13 +31,12 @@ Templates / runtime docs:
 - ✅ .specify/templates/tasks-template.md — no change.
 - ✅ .specify/templates/commands/*.md — the directory is not present in this repo.
 - ✅ CLAUDE.md — version reference updated to v1.4.0, with a retention note.
-- ⚠ README.md, docs/outbox.md, docs/consumed-dead-letters.md — they still say entries, dead
-  letters and markers are never removed (true on `main` until US-09 ships). Update them in
-  US-09 (specs/009-data-retention).
+- ✅ README.md, docs/outbox.md, docs/consumed-dead-letters.md, docs/retention.md, ADR 0007 —
+  updated by US-09 (specs/009-data-retention).
 - ⚠ specs/001–008 — written against earlier versions; intentionally not modified.
 
 Follow-up TODOs:
-- The code does not purge anything yet. Tracked by US-09.
+- None. US-09 implements data retention.
 -->
 
 # ecommerce-payments Constitution

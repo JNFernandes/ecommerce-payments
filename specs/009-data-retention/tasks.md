@@ -147,25 +147,25 @@ past the cutoff are gone.
 
 ## Phase 5: Polish & Cross-Cutting Concerns
 
-- [ ] T011 [P] Write ADR **(new)** `docs/adr/0007-data-retention.md`.
+- [X] T011 [P] Write ADR **(new)** `docs/adr/0007-data-retention.md`.
   - **Context**: unbounded growth, and constitution v1.4.0.
   - **Decision**: purge by age with a setting per store, never purge `Pending` or `Exhausted` entries or business data, use batched `SKIP LOCKED` deletes, run as an hourly worker, and add age indexes.
   - **Rejected**: `pg_cron`, an unbounded `DELETE`, purging inside the relay, archiving.
   - **Consequences**: the marker trade-off, the dead-letter payload is lost after 90 days, a large first purge.
   - Add the ADR to `docs/adr/README.md`.
-- [ ] T012 [P] Write `docs/retention.md` **(new)**: what gets purged and when, what is never purged, the settings table with defaults (0 = keep forever), the marker trade-off, advice to export or replay dead letters before they expire, a query to see what the next run would delete, and the log line.
+- [X] T012 [P] Write `docs/retention.md` **(new)**: what gets purged and when, what is never purged, the settings table with defaults (0 = keep forever), the marker trade-off, advice to export or replay dead letters before they expire, a query to see what the next run would delete, and the log line.
   - In `docs/outbox.md`, replace "Published entries are kept … cleaning them up is a separate concern" with a link to retention.
   - In `docs/consumed-dead-letters.md`, replace "never removes them" with the 90-day retention and the same link.
-- [ ] T013 [P] Update `README.md`:
+- [X] T013 [P] Update `README.md`:
   - **Background services table**: add `RetentionWorker`.
   - **Configuration table**: add the `Retention:*` keys.
   - **Known limitations**: remove "Published outbox entries are kept and never cleaned up", "Cancellation markers are never expired" and "the service never removes them" for dead letters. Add the marker trade-off.
   - **Project layout**: add `docs/retention.md`.
-- [ ] T014 [P] Update the project READMEs and CLAUDE.md.
+- [X] T014 [P] Update the project READMEs and CLAUDE.md.
   - `src/Ecommerce.Payments.Infrastructure/README.md`: add the `Retention/` folder.
   - `src/Ecommerce.Payments.Consumer/README.md`: add the hosted service and its settings.
   - `CLAUDE.md`: replace the "in progress" retention note with the actual rule and settings.
-- [ ] T015 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all tasks `[X]`.
+- [X] T015 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all tasks `[X]`.
 
 ---
 
