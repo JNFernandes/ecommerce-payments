@@ -90,7 +90,7 @@ entry, and one "duplicate delivery" log line.
 
 ## Phase 2: Polish & Cross-Cutting Concerns
 
-- [ ] T005 [P] Update the docs:
+- [X] T005 [P] Update the docs:
   - `README.md`: remove the "Known limitations" bullet about `OrderPlacedConsumer`
     deduplicating by order id. In the idempotency paragraph, say that a redelivery is
     recognised by `eventId`, with the order id as the one-payment-per-order guarantee.
@@ -99,7 +99,7 @@ entry, and one "duplicate delivery" log line.
     Domain runs, then the order id).
   - `src/Ecommerce.Payments.Service/README.md`: describe the `ProcessPaymentHandler`
     idempotency.
-- [ ] T006 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all
+- [X] T006 Run the full quality gate and `docker build -t ecommerce-payments .`, then mark all
   tasks `[X]`.
 
 ---

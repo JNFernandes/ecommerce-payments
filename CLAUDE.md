@@ -116,8 +116,11 @@ in the background.
   `eventId` is stored on the payment as `RefundSourceEventId`; a redelivery with that id is
   ignored before Domain, and a re-published cancellation (new `eventId`) is ignored because the
   payment is already `Refunded`. `SaveRefundAsync` is conditional (only if still Processed) so
-  concurrent deliveries cannot refund twice. (`OrderPlacedConsumer` still dedupes by order id —
-  pre-existing.)
+  concurrent deliveries cannot refund twice.
+- For `OrderPlaced` (US-08): the payment stores the `eventId` that created it
+  (`SourceEventId`). A redelivery with that id is logged as a duplicate delivery before Domain
+  runs. Any other `OrderPlaced` for an order that already has a payment is ignored as "already
+  exists". Neither case writes anything.
 - New consumers derive from `KafkaConsumerBase`:
   - It commits after success, retries the same message in place with backoff, and never commits
     past a failure.
