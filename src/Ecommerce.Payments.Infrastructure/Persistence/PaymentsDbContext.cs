@@ -57,12 +57,18 @@ public sealed class PaymentsDbContext : DbContext
             // Per-payment ordering check (an earlier unpublished entry blocks later ones).
             entry.HasIndex(e => new { e.PaymentId, e.Sequence })
                 .HasDatabaseName("IX_payment_outbox_payment_sequence");
+            // Retention purge (US-09): only published entries are ever eligible.
+            entry.HasIndex(e => e.PublishedAt)
+                .HasDatabaseName("IX_payment_outbox_published_at")
+                .HasFilter("\"Status\" = 'Published'");
         });
 
         modelBuilder.Entity<CancellationMarkerEntity>(marker =>
         {
             marker.ToTable("order_cancellation_markers");
             marker.HasKey(m => m.OrderId);
+            // Retention purge (US-09).
+            marker.HasIndex(m => m.RecordedAt).HasDatabaseName("IX_order_cancellation_markers_recorded_at");
         });
 
         modelBuilder.Entity<ConsumedDeadLetterEntity>(deadLetter =>
@@ -75,6 +81,8 @@ public sealed class PaymentsDbContext : DbContext
             deadLetter.HasIndex(d => new { d.Topic, d.Partition, d.Offset })
                 .IsUnique()
                 .HasDatabaseName("IX_consumed_dead_letters_position");
+            // Retention purge (US-09).
+            deadLetter.HasIndex(d => d.FailedAt).HasDatabaseName("IX_consumed_dead_letters_failed_at");
         });
     }
 }

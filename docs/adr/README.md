@@ -22,3 +22,4 @@ requires (Documentation Standards).
 | [0004](0004-per-order-serialisation.md) | Per-order serialisation of placement and cancellation (cancellation markers + advisory lock) | Accepted |
 | [0005](0005-inbound-dead-letter.md) | Inbound dead-letter after bounded consumer retries | Accepted |
 | [0006](0006-transactional-outbox.md) | Transactional outbox for payment events | Accepted |
+| [0007](0007-data-retention.md) | Data retention by age with batched, SKIP LOCKED deletes | Accepted |

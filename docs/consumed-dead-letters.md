@@ -27,6 +27,12 @@ Nothing replays `consumed_dead_letters` automatically.
 
 The attempt count lives in memory, so after a restart the count starts again.
 
+## Retention
+
+Rows are purged after `Retention:ConsumedDeadLettersDays` (default 90 days; `0` keeps them
+forever). Replay or export the rows you still need before then. See [retention.md](retention.md)
+(US-09).
+
 ## Columns
 
 | Column | Meaning |

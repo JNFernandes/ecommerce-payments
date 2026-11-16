@@ -2,6 +2,7 @@ using Ecommerce.Payments.Consumer.Consumers;
 using Ecommerce.Payments.Infrastructure.Outbox;
 using Ecommerce.Payments.Infrastructure.Messaging;
 using Ecommerce.Payments.Infrastructure.Persistence;
+using Ecommerce.Payments.Infrastructure.Retention;
 using Ecommerce.Payments.Service.Payments;
 using Microsoft.EntityFrameworkCore;
 
@@ -27,6 +28,14 @@ builder.Services
     .Validate(
         options => options.IsValid(),
         "OutboxRelay settings must be positive and MaxDelayMs must be >= BaseDelayMs.")
+    .ValidateOnStart();
+
+builder.Services
+    .AddOptions<RetentionOptions>()
+    .Bind(builder.Configuration.GetSection(RetentionOptions.SectionName))
+    .Validate(
+        options => options.IsValid(),
+        "Retention settings: IntervalMs and BatchSize must be positive and retention days must be >= 0.")
     .ValidateOnStart();
 
 builder.Services
@@ -60,6 +69,9 @@ builder.Services.AddScoped<IOutboxRelayProcessor, OutboxRelayProcessor>();
 builder.Services.AddHostedService<OrderPlacedConsumer>();
 builder.Services.AddHostedService<OrderCancelledConsumer>();
 builder.Services.AddHostedService<OutboxRelayWorker>();
+// Data retention (US-09, ADR 0007): hourly batched purge of old outbox entries, dead letters and markers.
+builder.Services.AddRetention();
+builder.Services.AddHostedService<RetentionWorker>();
 
 var host = builder.Build();
 host.Run();
