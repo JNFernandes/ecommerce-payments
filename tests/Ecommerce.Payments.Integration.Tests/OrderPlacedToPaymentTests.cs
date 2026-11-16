@@ -51,6 +51,41 @@ public class OrderPlacedToPaymentTests : IAsyncLifetime
         Assert.Single(outbox.Processed, p => p.OrderId == orderId);
     }
 
+    [Fact]
+    public async Task Redelivered_OrderPlaced_With_Same_EventId_Leaves_One_Payment_And_One_Outbox_Entry()
+    {
+        var provider = BuildServiceProvider();
+        using var consumer = CreateConsumer(provider);
+        var orderId = Guid.NewGuid();
+        var message = BuildOrderPlacedJson(orderId);
+
+        Assert.True(await consumer.HandleMessageAsync(message, CancellationToken.None));
+        Assert.True(await consumer.HandleMessageAsync(message, CancellationToken.None));
+
+        await AssertOnePaymentAndOneEntryAsync(provider, orderId);
+    }
+
+    [Fact]
+    public async Task OrderPlaced_With_New_EventId_For_Existing_Order_Leaves_One_Payment_And_One_Outbox_Entry()
+    {
+        var provider = BuildServiceProvider();
+        using var consumer = CreateConsumer(provider);
+        var orderId = Guid.NewGuid();
+
+        Assert.True(await consumer.HandleMessageAsync(BuildOrderPlacedJson(orderId), CancellationToken.None));
+        Assert.True(await consumer.HandleMessageAsync(BuildOrderPlacedJson(orderId), CancellationToken.None));
+
+        await AssertOnePaymentAndOneEntryAsync(provider, orderId);
+    }
+
+    private static async Task AssertOnePaymentAndOneEntryAsync(ServiceProvider provider, Guid orderId)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+        Assert.Equal(1, await dbContext.Payments.CountAsync(p => p.OrderId == orderId));
+        Assert.Single(provider.GetRequiredService<OutboxReader>().Processed, p => p.OrderId == orderId);
+    }
+
     private ServiceProvider BuildServiceProvider()
     {
         var services = new ServiceCollection();

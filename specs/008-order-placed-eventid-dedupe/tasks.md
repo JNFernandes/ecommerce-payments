@@ -41,7 +41,7 @@ entry, and one "duplicate delivery" log line.
 
 ### Tests for User Story 1
 
-- [ ] T001 [P] [US1] Update `tests/Ecommerce.Payments.Service.Tests/Payments/ProcessPaymentHandlerTests.cs`.
+- [X] T001 [P] [US1] Update `tests/Ecommerce.Payments.Service.Tests/Payments/ProcessPaymentHandlerTests.cs`.
   - Replace every `ExistsByOrderIdAsync` setup or verify with `GetByOrderIdAsync`:
     - `false` setups are deleted, because Moq returns `null` by default.
     - `true` setups return a payment built with `Payment.Rehydrate(...)` and status `Processed`.
@@ -55,7 +55,7 @@ entry, and one "duplicate delivery" log line.
     - `Should_Log_Already_Exists_When_Payment_Was_Created_By_Another_EventId`. Use a different
       `sourceEventId`. Expect no writes, and exactly one Information entry containing "already
       exists" and that source event id.
-- [ ] T002 [P] [US1] Extend `tests/Ecommerce.Payments.Integration.Tests/OrderPlacedToPaymentTests.cs`
+- [X] T002 [P] [US1] Extend `tests/Ecommerce.Payments.Integration.Tests/OrderPlacedToPaymentTests.cs`
   with two tests. Each drives the `OrderPlacedConsumer` against PostgreSQL and uses `OutboxReader`.
   - `Redelivered_OrderPlaced_With_Same_EventId_Leaves_One_Payment_And_One_Outbox_Entry`: the
     same raw message is handled twice, and both calls return `true`.
@@ -63,7 +63,7 @@ entry, and one "duplicate delivery" log line.
 
 ### Implementation for User Story 1
 
-- [ ] T003 [US1] Change `src/Ecommerce.Payments.Service/Payments/ProcessPaymentHandler.cs`.
+- [X] T003 [US1] Change `src/Ecommerce.Payments.Service/Payments/ProcessPaymentHandler.cs`.
   - In `CreatePaymentAsync`, replace the `ExistsByOrderIdAsync` check with
     `var existing = await _repository.GetByOrderIdAsync(orderId, ct)`. If it is not null, return:
     - `new Outcome.DuplicateDelivery(existing.Id)` when
@@ -79,7 +79,7 @@ entry, and one "duplicate delivery" log line.
     (Constitution II).
 
   Makes T001 and T002 pass.
-- [ ] T004 [US1] Remove `ExistsByOrderIdAsync` from
+- [X] T004 [US1] Remove `ExistsByOrderIdAsync` from
   `src/Ecommerce.Payments.Service/Payments/IPaymentRepository.cs` and from
   `src/Ecommerce.Payments.Infrastructure/Persistence/PaymentRepository.cs`. Update the
   interface's XML doc to name `GetByOrderIdAsync` as the idempotency lookup. Depends on T003.

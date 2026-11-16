@@ -46,10 +46,6 @@ public sealed class PaymentRepository : IPaymentRepository
     }
 
     /// <inheritdoc />
-    public Task<bool> ExistsByOrderIdAsync(Guid orderId, CancellationToken cancellationToken) =>
-        _dbContext.Payments.AnyAsync(p => p.OrderId == orderId, cancellationToken);
-
-    /// <inheritdoc />
     public async Task<bool> SaveRefundAsync(Payment payment, CancellationToken cancellationToken)
     {
         var updated = await _dbContext.Payments

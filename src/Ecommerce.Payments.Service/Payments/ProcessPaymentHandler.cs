@@ -46,7 +46,9 @@ public sealed class ProcessPaymentHandler
     /// <summary>
     /// Processes a single validated <c>OrderPlaced</c> event. Inside one per-order transaction
     /// (which serialises it against an <c>OrderCancelled</c> for the same order — ADR 0004):
-    /// returns if the order already has a payment (idempotency, Constitution II); returns with
+    /// if the order already has a payment, returns with one Information log — "duplicate delivery"
+    /// when that payment was created by this same <c>eventId</c> (dedupe by <c>eventId</c> before
+    /// any Domain call, Constitution II), "already exists" otherwise; returns with
     /// one Information log, creating and publishing nothing, if the order has a cancellation
     /// marker (Constitution VI "Cancellation markers"); otherwise creates and evaluates the
     /// <see cref="Payment"/>, saves it together with its outbox entry and commits; the relay
@@ -77,14 +79,33 @@ public sealed class ProcessPaymentHandler
             throw;
         }
 
-        if (outcome is Outcome.OrderCancelled cancelled)
+        switch (outcome)
         {
-            _logger.LogInformation(
-                "Not charging order {OrderId} (OrderPlaced {EventId}): the order was already cancelled by " +
-                "OrderCancelled {CancelEventId}; no payment created and nothing published.",
-                orderId,
-                orderPlaced.EventId,
-                cancelled.CancelEventId);
+            case Outcome.DuplicateDelivery duplicate:
+                _logger.LogInformation(
+                    "Ignoring OrderPlaced {EventId} for order {OrderId}: duplicate delivery; payment {PaymentId} " +
+                    "was created by it.",
+                    orderPlaced.EventId,
+                    orderId,
+                    duplicate.PaymentId);
+                break;
+            case Outcome.AlreadyExists existing:
+                _logger.LogInformation(
+                    "Ignoring OrderPlaced {EventId} for order {OrderId}: payment {PaymentId} already exists " +
+                    "(created by OrderPlaced {SourceEventId}).",
+                    orderPlaced.EventId,
+                    orderId,
+                    existing.PaymentId,
+                    existing.SourceEventId);
+                break;
+            case Outcome.OrderCancelled cancelled:
+                _logger.LogInformation(
+                    "Not charging order {OrderId} (OrderPlaced {EventId}): the order was already cancelled by " +
+                    "OrderCancelled {CancelEventId}; no payment created and nothing published.",
+                    orderId,
+                    orderPlaced.EventId,
+                    cancelled.CancelEventId);
+                break;
         }
     }
 
@@ -94,9 +115,15 @@ public sealed class ProcessPaymentHandler
         var orderId = orderPlaced.AggregateId;
         await using var transaction = await _unitOfWork.BeginAsync(orderId, cancellationToken);
 
-        if (await _repository.ExistsByOrderIdAsync(orderId, cancellationToken))
+        // Idempotency (Constitution II), before any Domain call: a redelivery is recognised by its
+        // eventId (the one that created the payment); any other OrderPlaced for an order that
+        // already has a payment is ignored too (at most one payment per order).
+        var existing = await _repository.GetByOrderIdAsync(orderId, cancellationToken);
+        if (existing is not null)
         {
-            return new Outcome.AlreadyExists();
+            return existing.SourceEventId == orderPlaced.EventId
+                ? new Outcome.DuplicateDelivery(existing.Id)
+                : new Outcome.AlreadyExists(existing.Id, existing.SourceEventId);
         }
 
         // The cancellation overtook this OrderPlaced: never charge it (Constitution VI
@@ -139,7 +166,9 @@ public sealed class ProcessPaymentHandler
     {
         public sealed record Created : Outcome;
 
-        public sealed record AlreadyExists : Outcome;
+        public sealed record DuplicateDelivery(Guid PaymentId) : Outcome;
+
+        public sealed record AlreadyExists(Guid PaymentId, Guid SourceEventId) : Outcome;
 
         public sealed record OrderCancelled(Guid CancelEventId) : Outcome;
     }
